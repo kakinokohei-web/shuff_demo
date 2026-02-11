@@ -1,0 +1,3384 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>SHUFF v5.0</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1e293b; }
+    input, select, textarea { font-size: 16px; }
+    /* モバイルタッチ改善：300ms遅延を無効化 */
+    button, a, [role="button"] {
+      touch-action: manipulation;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    // ============================================
+    // Supabase設定（デモ用プロジェクト）
+    // ============================================
+    const SUPABASE_URL = 'https://jvgvnarwegqtqgpmhgdk.supabase.co';
+    const SUPABASE_ANON_KEY = 'sb_publishable_u4o0lNeGwiWM9OOABA6GjA_T8S336uk';
+
+    // Supabaseクライアント
+    const supabase = {
+      from: (table) => {
+        const query = `${SUPABASE_URL}/rest/v1/${table}`;
+        const headers = {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+        };
+        return {
+          select: (columns = '*') => {
+            let filters = [];
+            let isSingle = false;
+            const builder = {
+              eq: (column, value) => {
+                filters.push(`${column}=eq.${value}`);
+                return builder;
+              },
+              single: () => {
+                isSingle = true;
+                return builder;
+              },
+              then: async (resolve, reject) => {
+                try {
+                  const filterStr = filters.length > 0 ? `&${filters.join('&')}` : '';
+                  const res = await fetch(`${query}?select=${columns}${filterStr}`, { headers });
+                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                  const data = await res.json();
+                  if (isSingle) {
+                    resolve({ data: Array.isArray(data) && data.length > 0 ? data[0] : null, error: null });
+                  } else {
+                    resolve({ data: Array.isArray(data) ? data : [], error: null });
+                  }
+                } catch (err) {
+                  resolve({ data: isSingle ? null : [], error: err.message });
+                }
+              }
+            };
+            return builder;
+          },
+          insert: async (rows) => {
+            try {
+              console.log('[INSERT]', table, rows);
+              const res = await fetch(query, {
+                method: 'POST',
+                headers: { ...headers, 'Prefer': 'return=representation' },
+                body: JSON.stringify(rows),
+              });
+              if (!res.ok) {
+                const errorText = await res.text();
+                console.error('[INSERT ERROR]', res.status, errorText);
+                throw new Error(`HTTP ${res.status}: ${errorText}`);
+              }
+              const data = await res.json();
+              return { data: Array.isArray(data) ? data : [], error: null };
+            } catch (err) {
+              return { data: [], error: err.message };
+            }
+          },
+          update: (updates) => ({
+            eq: async (column, value) => {
+              try {
+                const res = await fetch(`${query}?${column}=eq.${value}`, {
+                  method: 'PATCH',
+                  headers: { ...headers, 'Prefer': 'return=representation' },
+                  body: JSON.stringify(updates),
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                return { data: Array.isArray(data) ? data : [], error: null };
+              } catch (err) {
+                return { data: [], error: err.message };
+              }
+            },
+          }),
+          delete: () => ({
+            eq: async (column, value) => {
+              try {
+                const res = await fetch(`${query}?${column}=eq.${value}`, { method: 'DELETE', headers });
+                return { error: res.ok ? null : 'Delete failed' };
+              } catch (err) {
+                return { error: err.message };
+              }
+            },
+          }),
+          upsert: async (rows) => {
+            try {
+              const res = await fetch(query, {
+                method: 'POST',
+                headers: { ...headers, 'Prefer': 'return=representation,resolution=merge-duplicates' },
+                body: JSON.stringify(rows),
+              });
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              const data = await res.json();
+              return { data: Array.isArray(data) ? data : [], error: null };
+            } catch (err) {
+              return { data: [], error: err.message };
+            }
+          },
+        };
+      },
+    };
+
+    // ============================================
+    // ユーティリティ
+    // ============================================
+    const getStatusColor = (status) => {
+      switch (status) {
+        case 'VIP': return 'bg-yellow-500';
+        case '常連': return 'bg-blue-500';
+        case '新規': return 'bg-green-500';
+        default: return 'bg-gray-500';
+      }
+    };
+
+    const getStatusBgLight = (status) => {
+      switch (status) {
+        case 'VIP': return 'bg-yellow-100 border-yellow-400';
+        case '常連': return 'bg-blue-100 border-blue-400';
+        case '新規': return 'bg-green-100 border-green-400';
+        default: return 'bg-gray-100 border-gray-400';
+      }
+    };
+
+    const formatTime = (dateString) => {
+      if (!dateString) return '-';
+      return new Date(dateString).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+    };
+
+    const formatDateFull = (dateString) => {
+      if (!dateString) return '-';
+      const d = new Date(dateString);
+      const days = ['日', '月', '火', '水', '木', '金', '土'];
+      return `${d.getMonth()+1}/${d.getDate()}(${days[d.getDay()]})`;
+    };
+
+    // ============================================
+    // ナビゲーションバー
+    // ============================================
+    const NavBar = ({ currentPage, onNavigate }) => {
+      const tabs = [
+        { id: 'floor', icon: '🪑', label: 'フロア' },
+        { id: 'dashboard', icon: '📊', label: '売上' },
+        { id: 'staff', icon: '🥂', label: 'スタドリ' },
+        { id: 'shift', icon: '📅', label: 'シフト' },
+        { id: 'customers', icon: '👥', label: '顧客' },
+        { id: 'settings', icon: '⚙️', label: '設定' },
+      ];
+      return (
+        <div className="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg z-40">
+          <div className="flex">
+            {tabs.map(tab => (
+              <button key={tab.id} onClick={() => onNavigate(tab.id)}
+                className={`flex-1 py-2 text-center transition-colors flex flex-col items-center
+                  ${currentPage === tab.id ? 'text-blue-600 bg-blue-50' : 'text-gray-500'}`}>
+                <span className="text-lg">{tab.icon}</span>
+                <span className="text-xs">{tab.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    };
+
+    // チャージ計算（¥880/時間/人）- 着席した時点で1時間分発生
+    const CHARGE_PER_HOUR = 880;
+    const calculateCharge = (seatedAt, partySize = 1, currentTime = Date.now()) => {
+      if (!seatedAt) return 0;
+      const minutes = (currentTime - new Date(seatedAt).getTime()) / 60000;
+      const hours = Math.floor(minutes / 60) + 1; // 0分=1時間分、61分=2時間分
+      return hours * CHARGE_PER_HOUR * partySize;
+    };
+
+    // ============================================
+    // カウンター席コンポーネント（金額表示付き・グループ対応）
+    // ============================================
+    const CounterSeat = ({ seat, customer, visit, seatTotal, groupTotal, isPrimary, primarySeatId, groupColor, onSelect, currentTime }) => {
+      // currentTimeが変わると再レンダリングされ、経過時間が再計算される
+      const duration = visit?.seated_at ? Math.floor((currentTime - new Date(visit.seated_at).getTime()) / 60000) : 0;
+
+      // グループ色のボーダー設定
+      const groupBorderColors = {
+        purple: 'ring-4 ring-purple-400',
+        pink: 'ring-4 ring-pink-400',
+        cyan: 'ring-4 ring-cyan-400',
+        orange: 'ring-4 ring-orange-400',
+        lime: 'ring-4 ring-lime-400',
+        amber: 'ring-4 ring-amber-400',
+        teal: 'ring-4 ring-teal-400',
+        rose: 'ring-4 ring-rose-400',
+      };
+
+      return (
+        <button onClick={() => onSelect(seat)}
+          className={`w-14 h-14 rounded-full flex flex-col items-center justify-center transition-all duration-200 border-2 shadow-sm
+            ${groupColor ? groupBorderColors[groupColor] : ''}
+            ${seat.occupied
+              ? `${customer ? getStatusBgLight(customer.status) : 'bg-orange-100 border-orange-400'} active:scale-95`
+              : 'bg-gray-100 border-gray-300 active:scale-95 active:bg-gray-200'}`}>
+          <span className={`text-xs font-bold ${seat.occupied ? 'text-gray-700' : 'text-gray-400'}`}>
+            {seat.id.replace('C', '')}
+          </span>
+          {seat.occupied && (
+            <>
+              <span className="text-[8px] text-gray-500">{duration}分</span>
+              {isPrimary ? (
+                <span className="text-[8px] font-bold text-green-600">¥{groupTotal.toLocaleString()}</span>
+              ) : (
+                <span className="text-[8px] text-gray-400">→{primarySeatId?.replace('C', '')}</span>
+              )}
+            </>
+          )}
+        </button>
+      );
+    };
+
+    // ============================================
+    // テーブル席コンポーネント（金額表示付き・グループ対応）
+    // ============================================
+    const TableSeat = ({ seat, customer, visit, seatTotal, groupTotal, isPrimary, primarySeatId, groupColor, onSelect, currentTime }) => {
+      // currentTimeが変わると再レンダリングされ、経過時間が再計算される
+      const duration = visit?.seated_at ? Math.floor((currentTime - new Date(visit.seated_at).getTime()) / 60000) : 0;
+      const partySize = visit?.party_size || 1;
+
+      // グループ色のボーダー設定
+      const groupBorderColors = {
+        purple: 'ring-4 ring-purple-400',
+        pink: 'ring-4 ring-pink-400',
+        cyan: 'ring-4 ring-cyan-400',
+        orange: 'ring-4 ring-orange-400',
+        lime: 'ring-4 ring-lime-400',
+        amber: 'ring-4 ring-amber-400',
+        teal: 'ring-4 ring-teal-400',
+        rose: 'ring-4 ring-rose-400',
+      };
+
+      return (
+        <button onClick={() => onSelect(seat)}
+          className={`w-28 h-24 rounded-xl flex flex-col items-center justify-center transition-all duration-200 border-2 shadow-md
+            ${groupColor ? groupBorderColors[groupColor] : ''}
+            ${seat.occupied
+              ? `${customer ? getStatusBgLight(customer.status) : 'bg-orange-100 border-orange-400'} active:scale-95`
+              : 'bg-gray-100 border-gray-300 active:scale-95 active:bg-gray-200'}`}>
+          <span className={`text-sm font-bold ${seat.occupied ? 'text-gray-700' : 'text-gray-400'}`}>
+            {seat.id}
+          </span>
+          {seat.occupied ? (
+            <>
+              {customer && <span className="text-xs text-gray-600 truncate w-full px-1 text-center">{customer.name.substring(0,4)}</span>}
+              <div className="flex items-center gap-1 text-[10px] text-gray-500">
+                <span>{partySize}名</span>
+                <span>{duration}分</span>
+              </div>
+              {isPrimary ? (
+                <span className="text-xs font-bold text-green-600">¥{groupTotal.toLocaleString()}</span>
+              ) : (
+                <span className="text-xs text-gray-400">→{primarySeatId}</span>
+              )}
+            </>
+          ) : (
+            <span className="text-xs text-gray-400">空席</span>
+          )}
+        </button>
+      );
+    };
+
+    // ============================================
+    // 顧客オートコンプリート
+    // ============================================
+    const CustomerAutocomplete = ({ customers, onSelect, onCreateNew }) => {
+      const [search, setSearch] = useState('');
+      const [showSuggestions, setShowSuggestions] = useState(false);
+
+      const filtered = useMemo(() => {
+        if (!search.trim()) return [];
+        const s = search.toLowerCase();
+        return customers.filter(c =>
+          c.name.toLowerCase().includes(s) ||
+          (c.name_kana && c.name_kana.toLowerCase().includes(s)) ||
+          (c.favorite && c.favorite.toLowerCase().includes(s)) ||
+          (c.appearance && c.appearance.toLowerCase().includes(s))
+        ).slice(0, 5);
+      }, [search, customers]);
+
+      return (
+        <div className="relative">
+          <input type="text" value={search}
+            onChange={(e) => { setSearch(e.target.value); setShowSuggestions(true); }}
+            onFocus={() => setShowSuggestions(true)}
+            className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500"
+            placeholder="名前・特徴で検索..." />
+          {showSuggestions && search && (
+            <div className="absolute top-full left-0 right-0 bg-white border rounded-xl shadow-lg mt-1 z-50 max-h-60 overflow-y-auto">
+              {filtered.map(customer => (
+                <button key={customer.id}
+                  onClick={() => { onSelect(customer); setSearch(''); setShowSuggestions(false); }}
+                  className="w-full text-left p-3 hover:bg-gray-50 active:bg-gray-100 border-b last:border-0">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <div className="font-semibold">{customer.name}</div>
+                      <div className="text-xs text-gray-500">{customer.appearance || customer.favorite || '情報なし'}</div>
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-xs text-white ${getStatusColor(customer.status)}`}>{customer.status}</span>
+                  </div>
+                </button>
+              ))}
+              {filtered.length === 0 && <div className="p-3 text-center text-gray-500">該当なし</div>}
+              <button onClick={() => { onCreateNew(search); setShowSuggestions(false); }}
+                className="w-full p-3 text-center text-green-600 font-semibold hover:bg-green-50 border-t">
+                ＋「{search}」を新規登録
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // ============================================
+    // 来店予測（曜日パターン）
+    // ============================================
+    const getVisitPrediction = (customer) => {
+      const today = new Date().getDay(); // 0=日, 1=月, ...
+      const dayNames = ['日', '月', '火', '水', '木', '金', '土'];
+      const pattern = customer.visit_pattern || {};
+      const todayCount = pattern[today] || 0;
+      const totalVisits = customer.total_visits || 0;
+      if (totalVisits < 2) return null;
+      const probability = totalVisits > 0 ? Math.round((todayCount / totalVisits) * 100) : 0;
+      if (probability >= 30) return { prob: probability, day: dayNames[today], high: true };
+      if (probability >= 15) return { prob: probability, day: dayNames[today], high: false };
+      return null;
+    };
+
+    // ============================================
+    // 新規顧客登録モーダル（常連優先・性別追加・複数席対応）
+    // ============================================
+    const NewCustomerModal = ({ seat, initialName, customers, allSeats, onClose, onSave, onSelectExisting }) => {
+      const [mode, setMode] = useState('select'); // 'select', 'new'
+      const [customerTab, setCustomerTab] = useState('regular'); // 'regular'（常連）, 'free'（フリー）
+
+      // フリー客用のダミー名を生成（西暦付き）
+      const generateDummyName = () => {
+        const now = new Date();
+        const dateStr = `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()}`;
+        const timeStr = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
+        return `${seat.id} (${dateStr} ${timeStr})`;
+      };
+      const [selectedCustomer, setSelectedCustomer] = useState(null);
+      const [name, setName] = useState(initialName || '');
+      const [nameKana, setNameKana] = useState('');
+      const [gender, setGender] = useState('');
+      const [status, setStatus] = useState('新規');
+      const [appearance, setAppearance] = useState('');
+      const [ageRange, setAgeRange] = useState('');
+      const [favorite, setFavorite] = useState('');
+      const [notes, setNotes] = useState('');
+      const [partySize, setPartySize] = useState('1');
+      const [selectedSeats, setSelectedSeats] = useState([seat.id]); // 複数席選択
+      const [saving, setSaving] = useState(false);
+      const [searchText, setSearchText] = useState('');
+
+      const isTable = seat.seat_type && seat.seat_type !== 'counter';
+      const isCounter = !isTable;
+
+      // 全てのカウンター席（C1〜C8の順番で表示）
+      const allCounterSeats = allSeats ? allSeats
+        .filter(s => s.seat_type === 'counter')
+        .sort((a, b) => {
+          const numA = parseInt(a.id.replace('C', ''));
+          const numB = parseInt(b.id.replace('C', ''));
+          return numA - numB;
+        }) : [];
+      const ageOptions = ['', '10代', '20代前半', '20代後半', '30代前半', '30代後半', '40代', '50代', '60代以上'];
+      const genderOptions = ['', '男性', '女性', 'その他'];
+
+      // 顧客ソート：直近来店者優先 → 利用金額順で補完
+      const sortedCustomers = useMemo(() => {
+        // 来店履歴がある顧客（直近順）
+        const withVisit = customers
+          .filter(c => c.last_visit_at)
+          .sort((a, b) => new Date(b.last_visit_at) - new Date(a.last_visit_at));
+
+        // 来店履歴がない顧客（利用金額順）
+        const withoutVisit = customers
+          .filter(c => !c.last_visit_at)
+          .sort((a, b) => (b.total_spent || 0) - (a.total_spent || 0));
+
+        // 来店履歴あり → 来店履歴なし の順で結合
+        return [...withVisit, ...withoutVisit];
+      }, [customers]);
+
+      // 検索フィルタ
+      const filteredCustomers = useMemo(() => {
+        // 検索テキストがない場合：上位10人を表示
+        if (!searchText.trim()) {
+          return sortedCustomers.slice(0, 10);
+        }
+        // 検索テキストがある場合：全顧客から検索
+        const s = searchText.toLowerCase();
+        return customers.filter(c =>
+          c.name.toLowerCase().includes(s) ||
+          (c.name_kana && c.name_kana.toLowerCase().includes(s)) ||
+          (c.favorite && c.favorite.toLowerCase().includes(s)) ||
+          (c.appearance && c.appearance.toLowerCase().includes(s))
+        ).slice(0, 20); // 検索時は20件まで表示
+      }, [sortedCustomers, customers, searchText]);
+
+      // 人数変更時に席選択をリセット
+      const handlePartySizeChange = (size) => {
+        setPartySize(size);
+        if (isCounter && parseInt(size) > 1) {
+          // カウンターで2名以上の場合、最初の席だけ選択状態に
+          setSelectedSeats([seat.id]);
+        }
+      };
+
+      // 席の選択切り替え
+      const toggleSeatSelection = (seatId) => {
+        const ps = parseInt(partySize) || 1;
+        if (selectedSeats.includes(seatId)) {
+          // 最初の席（タップした席）は外せない
+          if (seatId === seat.id) return;
+          setSelectedSeats(selectedSeats.filter(id => id !== seatId));
+        } else {
+          if (selectedSeats.length < ps) {
+            setSelectedSeats([...selectedSeats, seatId]);
+          }
+        }
+      };
+
+      // 新規顧客として登録して着席
+      const handleSaveNew = async () => {
+        if (!name.trim()) { alert('名前を入力してください'); return; }
+        const ps = parseInt(partySize) || 1;
+        if (isCounter && ps > 1 && selectedSeats.length !== ps) {
+          alert(`${ps}名の場合、${ps}席を選択してください`);
+          return;
+        }
+        setSaving(true);
+        await onSave({
+          name,
+          name_kana: nameKana,
+          gender,
+          status,
+          appearance,
+          age_range: ageRange,
+          favorite,
+          notes
+        }, selectedSeats, ps);
+        setSaving(false);
+      };
+
+      // 既存顧客を着席
+      const handleSeatExisting = async () => {
+        if (!selectedCustomer) return;
+        const ps = parseInt(partySize) || 1;
+        if (isCounter && ps > 1 && selectedSeats.length !== ps) {
+          alert(`${ps}名の場合、${ps}席を選択してください`);
+          return;
+        }
+        setSaving(true);
+        await onSelectExisting(selectedCustomer, selectedSeats, ps);
+        setSaving(false);
+      };
+
+      // 既存顧客を選択
+      const handleSelectCustomer = (customer) => {
+        setSelectedCustomer(customer);
+      };
+
+      // フリー客として着席（フォーム入力値を使用）
+      const handleSeatFree = async () => {
+        if (!name.trim()) { alert('名前を入力してください'); return; }
+        const ps = parseInt(partySize) || 1;
+        if (isCounter && ps > 1 && selectedSeats.length !== ps) {
+          alert(`${ps}名の場合、${ps}席を選択してください`);
+          return;
+        }
+        setSaving(true);
+        await onSave({
+          name,
+          name_kana: nameKana,
+          gender,
+          status,
+          appearance,
+          age_range: ageRange,
+          favorite,
+          notes
+        }, selectedSeats, ps);
+        setSaving(false);
+      };
+
+      // フリータブに切り替えたときにダミー名をセット
+      const handleTabChange = (tab) => {
+        setCustomerTab(tab);
+        if (tab === 'free') {
+          setName(generateDummyName());
+          // 他のフィールドをリセット
+          setNameKana('');
+          setGender('');
+          setStatus('新規');
+          setAppearance('');
+          setAgeRange('');
+          setFavorite('');
+          setNotes('');
+        } else {
+          // 常連タブに戻る時はリセット
+          setName(initialName || '');
+        }
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-5 w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">👤 {seat.id} に着席</h2>
+              <button onClick={onClose} className="text-gray-400 text-2xl">&times;</button>
+            </div>
+
+            {/* 人数入力（常に表示） */}
+            <div className="mb-4 bg-blue-50 p-3 rounded-xl">
+              <label className="block text-sm font-semibold text-blue-700 mb-2">👥 来店人数</label>
+              <div className="flex gap-2 flex-wrap">
+                {[1,2,3,4,5,6,7,8].map(n => (
+                  <button key={n} onClick={() => handlePartySizeChange(n.toString())}
+                    className={`w-10 h-10 rounded-full font-bold ${partySize === n.toString() ? 'bg-blue-500 text-white' : 'bg-white border-2 border-gray-300'}`}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* カウンター席で2名以上の場合、席選択 */}
+            {isCounter && parseInt(partySize) > 1 && (
+              <div className="mb-4 bg-amber-50 p-3 rounded-xl">
+                <label className="block text-sm font-semibold text-amber-700 mb-2">
+                  🪑 席を選択（{selectedSeats.length}/{partySize}席）
+                </label>
+                <div className="flex gap-1 justify-between">
+                  {allCounterSeats.map(s => {
+                    // 席の状態を判定
+                    const isCurrentSeat = s.id === seat.id; // 最初にタップした席
+                    const isSelected = selectedSeats.includes(s.id); // 選択済み
+                    const isOccupied = s.occupied && !isCurrentSeat; // 他の人が着席中
+
+                    return (
+                      <button
+                        key={s.id}
+                        onClick={() => !isOccupied && toggleSeatSelection(s.id)}
+                        disabled={isOccupied}
+                        className={`w-9 h-9 rounded-lg font-bold text-xs transition-all ${
+                          isOccupied
+                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                            : isSelected
+                              ? 'bg-amber-500 text-white'
+                              : 'bg-white border-2 border-gray-300'
+                        } ${isCurrentSeat ? 'ring-2 ring-amber-600' : ''}`}
+                      >
+                        {s.id}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-amber-600 mt-2">※ 最初にタップした席 {seat.id} は選択済み</p>
+              </div>
+            )}
+
+            {mode === 'select' ? (
+              <>
+                {/* 常連/フリー タブ切り替え */}
+                <div className="flex gap-2 mb-4">
+                  <button
+                    onClick={() => handleTabChange('regular')}
+                    className={`flex-1 py-2 rounded-xl font-semibold text-sm transition-all ${
+                      customerTab === 'regular'
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-gray-100 text-gray-600'
+                    }`}
+                  >
+                    👥 常連
+                  </button>
+                  <button
+                    onClick={() => handleTabChange('free')}
+                    className={`flex-1 py-2 rounded-xl font-semibold text-sm transition-all ${
+                      customerTab === 'free'
+                        ? 'bg-green-500 text-white'
+                        : 'bg-gray-100 text-gray-600'
+                    }`}
+                  >
+                    🆓 フリー
+                  </button>
+                </div>
+
+                {customerTab === 'regular' ? (
+                  <>
+                    {/* 顧客検索 */}
+                    <input type="text" value={searchText} onChange={(e) => setSearchText(e.target.value)}
+                      className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 mb-3 focus:outline-none focus:border-blue-500"
+                      placeholder="🔍 名前・特徴で検索..." />
+
+                {/* 既存顧客選択済み */}
+                {selectedCustomer && (
+                  <div className="mb-3 bg-green-50 border-2 border-green-400 rounded-xl p-3">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="font-bold text-green-800">✓ {selectedCustomer.name}</p>
+                        <p className="text-sm text-green-600">{selectedCustomer.favorite || selectedCustomer.appearance || ''}</p>
+                      </div>
+                      <button onClick={() => setSelectedCustomer(null)} className="text-green-600 text-sm">変更</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 常連リスト（来店予測付き） */}
+                {!selectedCustomer && (
+                  <div className="max-h-64 overflow-y-auto mb-3 border rounded-xl">
+                    {filteredCustomers.map(customer => {
+                      const pred = getVisitPrediction(customer);
+                      return (
+                        <button key={customer.id}
+                          onClick={() => handleSelectCustomer(customer)}
+                          className="w-full text-left p-3 hover:bg-gray-50 active:bg-gray-100 border-b last:border-0 flex justify-between items-center">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold">{customer.name}</span>
+                              <span className={`px-2 py-0.5 rounded-full text-xs text-white ${getStatusColor(customer.status)}`}>
+                                {customer.status}
+                              </span>
+                              {customer.gender && <span className="text-xs text-gray-400">{customer.gender}</span>}
+                            </div>
+                            <div className="text-xs text-gray-500">{customer.favorite || customer.appearance || '情報なし'}</div>
+                          </div>
+                          {pred && (
+                            <div className={`text-xs px-2 py-1 rounded-full ${pred.high ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                              {pred.day}曜{pred.prob}%
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                    {filteredCustomers.length === 0 && (
+                      <p className="text-center text-gray-400 py-4">該当する顧客がいません</p>
+                    )}
+                  </div>
+                )}
+
+                    {/* ボタン */}
+                    <div className="space-y-2">
+                      {selectedCustomer ? (
+                        <button onClick={handleSeatExisting} disabled={saving}
+                          className="w-full py-3 rounded-xl bg-green-500 text-white font-semibold active:bg-green-600 disabled:opacity-50">
+                          {saving ? '処理中...' : `${selectedCustomer.name}さんを着席（${partySize}名${isCounter && parseInt(partySize) > 1 ? ` / 席:${selectedSeats.join(',')}` : ''}）`}
+                        </button>
+                      ) : null}
+                      <button onClick={() => setMode('new')}
+                        className="w-full py-3 rounded-xl border-2 border-blue-500 text-blue-500 font-semibold active:bg-blue-50">
+                        ＋ 新規顧客として登録
+                      </button>
+                      <button onClick={onClose}
+                        className="w-full py-2 text-gray-500 text-sm">キャンセル</button>
+                    </div>
+                  </>
+                ) : (
+                  /* フリータブ - 新規顧客と同じフォーム（名前にダミー名がプリセット） */
+                  <div className="space-y-3">
+                    <div className="bg-green-50 border-2 border-green-200 rounded-xl p-2 text-center mb-2">
+                      <p className="text-green-700 text-sm">🆓 フリー客 - 後から情報を編集できます</p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">名前 *</label>
+                      <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+                        className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" placeholder="自動生成されます" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">ふりがな</label>
+                      <input type="text" value={nameKana} onChange={(e) => setNameKana(e.target.value)}
+                        className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" placeholder="やまだ たろう" />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">性別</label>
+                        <select value={gender} onChange={(e) => setGender(e.target.value)}
+                          className="w-full border-2 border-gray-200 rounded-xl px-2 py-2">
+                          {genderOptions.map(g => <option key={g} value={g}>{g || '選択'}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">ステータス</label>
+                        <select value={status} onChange={(e) => setStatus(e.target.value)}
+                          className="w-full border-2 border-gray-200 rounded-xl px-2 py-2">
+                          <option value="新規">新規</option>
+                          <option value="常連">常連</option>
+                          <option value="VIP">VIP</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">年代</label>
+                        <select value={ageRange} onChange={(e) => setAgeRange(e.target.value)}
+                          className="w-full border-2 border-gray-200 rounded-xl px-2 py-2">
+                          {ageOptions.map(a => <option key={a} value={a}>{a || '選択'}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">見た目・特徴</label>
+                      <input type="text" value={appearance} onChange={(e) => setAppearance(e.target.value)}
+                        className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" placeholder="メガネ、長髪..." />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">好みのドリンク</label>
+                      <input type="text" value={favorite} onChange={(e) => setFavorite(e.target.value)}
+                        className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" placeholder="ハイボール薄め" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">メモ</label>
+                      <textarea value={notes} onChange={(e) => setNotes(e.target.value)}
+                        className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" rows={2} placeholder="話題、注意点" />
+                    </div>
+                    <div className="flex gap-3 mt-3">
+                      <button onClick={onClose} className="flex-1 py-3 rounded-xl border-2 border-gray-300 font-semibold">
+                        キャンセル
+                      </button>
+                      <button onClick={handleSeatFree} disabled={saving || !name.trim() || (isCounter && parseInt(partySize) > 1 && selectedSeats.length !== parseInt(partySize))}
+                        className="flex-1 py-3 rounded-xl bg-green-500 text-white font-semibold disabled:opacity-50">
+                        {saving ? '処理中...' : `フリーで着席（${partySize}名）`}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {/* 新規登録フォーム */}
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">名前 *</label>
+                    <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+                      className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" placeholder="山田 太郎" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">ふりがな</label>
+                    <input type="text" value={nameKana} onChange={(e) => setNameKana(e.target.value)}
+                      className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" placeholder="やまだ たろう" />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">性別</label>
+                      <select value={gender} onChange={(e) => setGender(e.target.value)}
+                        className="w-full border-2 border-gray-200 rounded-xl px-2 py-2">
+                        {genderOptions.map(g => <option key={g} value={g}>{g || '選択'}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">ステータス</label>
+                      <select value={status} onChange={(e) => setStatus(e.target.value)}
+                        className="w-full border-2 border-gray-200 rounded-xl px-2 py-2">
+                        <option value="新規">新規</option>
+                        <option value="常連">常連</option>
+                        <option value="VIP">VIP</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">年代</label>
+                      <select value={ageRange} onChange={(e) => setAgeRange(e.target.value)}
+                        className="w-full border-2 border-gray-200 rounded-xl px-2 py-2">
+                        {ageOptions.map(a => <option key={a} value={a}>{a || '選択'}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">見た目・特徴</label>
+                    <input type="text" value={appearance} onChange={(e) => setAppearance(e.target.value)}
+                      className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" placeholder="メガネ、長髪..." />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">好みのドリンク</label>
+                    <input type="text" value={favorite} onChange={(e) => setFavorite(e.target.value)}
+                      className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" placeholder="ハイボール薄め" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">メモ</label>
+                    <textarea value={notes} onChange={(e) => setNotes(e.target.value)}
+                      className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" rows={2} placeholder="話題、注意点" />
+                  </div>
+                </div>
+
+                <div className="flex gap-3 mt-5">
+                  <button onClick={() => setMode('select')} className="flex-1 py-3 rounded-xl border-2 border-gray-300 font-semibold">
+                    戻る
+                  </button>
+                  <button onClick={handleSaveNew} disabled={saving || !name.trim()}
+                    className="flex-1 py-3 rounded-xl bg-blue-500 text-white font-semibold disabled:opacity-50">
+                    {saving ? '登録中...' : `登録して着席（${partySize}名）`}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // 注文追加モーダル（選択式・スタッフドリンク対応）
+    // ============================================
+    const AddOrderModal = ({ customer, seatId, visitId, menuItems, users, workingStaff, onClose, onSave }) => {
+      // 出勤中スタッフのみ表示（workingStaffが空の場合は全員表示）
+      const availableStaff = workingStaff && workingStaff.length > 0
+        ? users.filter(u => workingStaff.includes(u.id))
+        : users;
+      const [orderType, setOrderType] = useState('customer'); // customer, staff_drink
+      const [selectedMenu, setSelectedMenu] = useState(null);
+      const [staffId, setStaffId] = useState('');
+      const [isBottleKeep, setIsBottleKeep] = useState(false);
+      const [customItem, setCustomItem] = useState('');
+      const [customPrice, setCustomPrice] = useState('');
+      const [saving, setSaving] = useState(false);
+
+      // カテゴリ別にグループ化
+      const groupedMenu = menuItems.filter(m => m.is_active).reduce((acc, item) => {
+        const cat = item.category || 'その他';
+        if (!acc[cat]) acc[cat] = [];
+        acc[cat].push(item);
+        return acc;
+      }, {});
+
+      const handleSave = async () => {
+        let item, price, order_type = orderType, staff_id = null;
+
+        if (orderType === 'staff_drink') {
+          if (!staffId) { alert('スタッフを選択してください'); return; }
+          staff_id = staffId;
+          item = isBottleKeep ? 'スタッフドリンク（ボトルキープ）' : 'スタッフドリンク';
+          price = isBottleKeep ? 500 : 1000;
+        } else if (selectedMenu) {
+          item = selectedMenu.name;
+          price = selectedMenu.price;
+        } else if (customItem && customPrice) {
+          item = customItem;
+          price = parseInt(customPrice);
+        } else {
+          alert('メニューを選択するか、品目を入力してください');
+          return;
+        }
+
+        setSaving(true);
+        await onSave({
+          customer_id: customer.id,
+          seat_id: seatId,
+          visit_id: visitId,
+          item,
+          price,
+          order_type,
+          staff_id
+        });
+        setSaving(false);
+        // 連続で注文できるようにリセット
+        setSelectedMenu(null);
+        setCustomItem('');
+        setCustomPrice('');
+        setStaffId('');
+        setIsBottleKeep(false);
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-5 w-full max-w-md max-h-[85vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-3">
+              <div>
+                <h2 className="text-xl font-bold">📝 注文追加</h2>
+                <p className="text-gray-500 text-sm">{customer.name}さん</p>
+              </div>
+              <button onClick={onClose} className="text-gray-400 text-2xl">&times;</button>
+            </div>
+
+            {/* 注文タイプ切り替え */}
+            <div className="flex gap-2 mb-4">
+              <button onClick={() => setOrderType('customer')}
+                className={`flex-1 py-2 rounded-xl font-semibold text-sm ${orderType === 'customer' ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}>
+                🍺 お客様注文
+              </button>
+              <button onClick={() => setOrderType('staff_drink')}
+                className={`flex-1 py-2 rounded-xl font-semibold text-sm ${orderType === 'staff_drink' ? 'bg-pink-500 text-white' : 'bg-gray-100'}`}>
+                🥂 スタッフドリンク
+              </button>
+            </div>
+
+            {orderType === 'customer' ? (
+              <>
+                {/* メニュー選択（カテゴリ別） */}
+                {Object.entries(groupedMenu).map(([category, items]) => (
+                  <div key={category} className="mb-3">
+                    <p className="text-xs font-semibold text-gray-500 mb-1">{category}</p>
+                    <div className="flex flex-wrap gap-2">
+                      {items.map(m => (
+                        <button key={m.id} onClick={() => setSelectedMenu(m)}
+                          className={`px-3 py-2 rounded-xl text-sm border-2 transition-all
+                            ${selectedMenu?.id === m.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white'}`}>
+                          {m.name}<span className="text-gray-400 ml-1">¥{m.price}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+                {/* カスタム入力 */}
+                <div className="border-t pt-3 mt-3">
+                  <p className="text-xs font-semibold text-gray-500 mb-2">その他（手入力）</p>
+                  <div className="flex gap-2">
+                    <input type="text" value={customItem} onChange={(e) => { setCustomItem(e.target.value); setSelectedMenu(null); }}
+                      className="flex-1 border-2 border-gray-200 rounded-xl px-3 py-2 text-sm" placeholder="品目名" />
+                    <input type="number" value={customPrice} onChange={(e) => setCustomPrice(e.target.value)}
+                      className="w-24 border-2 border-gray-200 rounded-xl px-3 py-2 text-sm" placeholder="金額" />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* スタッフドリンク */}
+                <div className="bg-pink-50 rounded-xl p-4 space-y-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-pink-700 mb-2">誰が飲んだ？</label>
+                    <div className="flex flex-wrap gap-2">
+                      {availableStaff.map(u => (
+                        <button key={u.id} onClick={() => setStaffId(u.id)}
+                          className={`px-4 py-2 rounded-full font-semibold transition-all ${
+                            staffId === u.id
+                              ? 'bg-pink-500 text-white'
+                              : 'bg-white border-2 border-pink-300 text-pink-600'
+                          }`}>
+                          {u.name}
+                        </button>
+                      ))}
+                    </div>
+                    {availableStaff.length === 0 && (
+                      <p className="text-sm text-pink-400 mt-2">出勤スタッフが登録されていません</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-pink-700 mb-2">種類</label>
+                    <div className="flex gap-3">
+                      <button onClick={() => setIsBottleKeep(false)}
+                        className={`flex-1 py-3 rounded-xl font-semibold ${!isBottleKeep ? 'bg-pink-500 text-white' : 'bg-white border-2 border-pink-300'}`}>
+                        通常 ¥1,000
+                      </button>
+                      <button onClick={() => setIsBottleKeep(true)}
+                        className={`flex-1 py-3 rounded-xl font-semibold ${isBottleKeep ? 'bg-pink-500 text-white' : 'bg-white border-2 border-pink-300'}`}>
+                        ボトルキープ ¥500
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* 選択中の表示 */}
+            {(selectedMenu || (customItem && customPrice) || (orderType === 'staff_drink' && staffId)) && (
+              <div className="mt-4 p-3 bg-green-50 rounded-xl">
+                <p className="text-sm text-green-700">
+                  {orderType === 'staff_drink'
+                    ? `${users.find(u => u.id === staffId)?.name || ''}のスタッフドリンク: ¥${isBottleKeep ? 500 : 1000}`
+                    : selectedMenu
+                      ? `${selectedMenu.name}: ¥${selectedMenu.price}`
+                      : `${customItem}: ¥${customPrice}`
+                  }
+                </p>
+              </div>
+            )}
+
+            <div className="flex gap-3 mt-4">
+              <button onClick={onClose} className="flex-1 py-3 rounded-xl border-2 border-gray-300 font-semibold">閉じる</button>
+              <button onClick={handleSave} disabled={saving}
+                className="flex-1 py-3 rounded-xl bg-blue-500 text-white font-semibold disabled:opacity-50">
+                {saving ? '追加中...' : '追加'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // 顧客編集モーダル
+    // ============================================
+    const CustomerDetailModal = ({ customer, onClose, onSave }) => {
+      const [name, setName] = useState(customer.name);
+      const [nameKana, setNameKana] = useState(customer.name_kana || '');
+      const [status, setStatus] = useState(customer.status || '新規');
+      const [appearance, setAppearance] = useState(customer.appearance || '');
+      const [ageRange, setAgeRange] = useState(customer.age_range || '');
+      const [favorite, setFavorite] = useState(customer.favorite || '');
+      const [notes, setNotes] = useState(customer.notes || '');
+      const [saving, setSaving] = useState(false);
+
+      const ageOptions = ['', '10代', '20代前半', '20代後半', '30代前半', '30代後半', '40代', '50代', '60代以上'];
+
+      const handleSave = async () => {
+        if (!name.trim()) { alert('名前を入力'); return; }
+        setSaving(true);
+        await onSave(customer.id, { name, name_kana: nameKana, status, appearance, age_range: ageRange, favorite, notes });
+        setSaving(false);
+        onClose();
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-5 w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <h2 className="text-xl font-bold mb-4">✏️ 顧客情報編集</h2>
+            <div className="space-y-3">
+              <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+                className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" placeholder="名前" />
+              <input type="text" value={nameKana} onChange={(e) => setNameKana(e.target.value)}
+                className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" placeholder="ふりがな" />
+              <div className="grid grid-cols-2 gap-3">
+                <select value={status} onChange={(e) => setStatus(e.target.value)} className="border-2 border-gray-200 rounded-xl px-3 py-2">
+                  <option value="新規">新規</option><option value="常連">常連</option><option value="VIP">VIP</option>
+                </select>
+                <select value={ageRange} onChange={(e) => setAgeRange(e.target.value)} className="border-2 border-gray-200 rounded-xl px-3 py-2">
+                  {ageOptions.map(a => <option key={a} value={a}>{a || '年代'}</option>)}
+                </select>
+              </div>
+              <input type="text" value={appearance} onChange={(e) => setAppearance(e.target.value)}
+                className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" placeholder="見た目・特徴" />
+              <input type="text" value={favorite} onChange={(e) => setFavorite(e.target.value)}
+                className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" placeholder="好み" />
+              <textarea value={notes} onChange={(e) => setNotes(e.target.value)}
+                className="w-full border-2 border-gray-200 rounded-xl px-3 py-2" rows={2} placeholder="メモ" />
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={onClose} className="flex-1 py-3 rounded-xl border-2 border-gray-300 font-semibold">キャンセル</button>
+              <button onClick={handleSave} disabled={saving} className="flex-1 py-3 rounded-xl bg-blue-500 text-white font-semibold disabled:opacity-50">
+                {saving ? '保存中...' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // 会計確認モーダル（カスタム）
+    // ============================================
+    const CheckoutConfirmModal = ({ data, onConfirm, onCancel }) => {
+      const [processing, setProcessing] = useState(false);
+
+      if (!data) return null;
+
+      const { customerOrderTotal, chargeTotal, staffDrinkTotal, grandTotal, partySize, chargeHours } = data;
+
+      const handleConfirm = async () => {
+        setProcessing(true);
+        await onConfirm();
+        setProcessing(false);
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-5 w-full max-w-sm">
+            <h2 className="text-xl font-bold mb-4 text-center">🧾 会計確認</h2>
+            <div className="bg-gray-50 rounded-xl p-4 mb-4 space-y-2">
+              <div className="flex justify-between">
+                <span className="text-gray-600">注文</span>
+                <span className="font-semibold">¥{customerOrderTotal.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">チャージ（{partySize}名×{chargeHours}h）</span>
+                <span className="font-semibold">¥{chargeTotal.toLocaleString()}</span>
+              </div>
+              {staffDrinkTotal > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">スタドリ</span>
+                  <span className="font-semibold">¥{staffDrinkTotal.toLocaleString()}</span>
+                </div>
+              )}
+              <hr className="my-2" />
+              <div className="flex justify-between text-lg">
+                <span className="font-bold">合計</span>
+                <span className="font-bold text-green-600">¥{grandTotal.toLocaleString()}</span>
+              </div>
+            </div>
+            <p className="text-center text-gray-600 mb-4">退店処理を実行しますか？</p>
+            <div className="flex gap-3">
+              <button
+                onClick={onCancel}
+                disabled={processing}
+                className="flex-1 py-3 rounded-xl border-2 border-gray-300 font-semibold active:bg-gray-100 disabled:opacity-50"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={processing}
+                className="flex-1 py-3 rounded-xl bg-orange-500 text-white font-semibold active:bg-orange-600 disabled:opacity-50"
+              >
+                {processing ? '処理中...' : 'OK 退店'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // 締め確認モーダル（カスタム）
+    // ============================================
+    const CloseConfirmModal = ({ data, onConfirm, onCancel }) => {
+      const [processing, setProcessing] = useState(false);
+
+      if (!data) return null;
+
+      const { orderTotal, chargeTotal, staffDrinkTotal, totalSales, totalCustomers } = data;
+
+      const handleConfirm = async () => {
+        setProcessing(true);
+        await onConfirm();
+        setProcessing(false);
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-5 w-full max-w-sm">
+            <h2 className="text-xl font-bold mb-4 text-center">🔐 本日の営業終了</h2>
+            <div className="bg-red-50 rounded-xl p-4 mb-4 space-y-2">
+              <div className="flex justify-between">
+                <span className="text-gray-600">来店組数</span>
+                <span className="font-semibold">{totalCustomers}組</span>
+              </div>
+              <hr className="my-2" />
+              <div className="flex justify-between">
+                <span className="text-gray-600">注文売上</span>
+                <span className="font-semibold">¥{orderTotal.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">チャージ</span>
+                <span className="font-semibold">¥{chargeTotal.toLocaleString()}</span>
+              </div>
+              {staffDrinkTotal > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">スタドリ</span>
+                  <span className="font-semibold">¥{staffDrinkTotal.toLocaleString()}</span>
+                </div>
+              )}
+              <hr className="my-2" />
+              <div className="flex justify-between text-lg">
+                <span className="font-bold">合計売上</span>
+                <span className="font-bold text-red-600">¥{totalSales.toLocaleString()}</span>
+              </div>
+            </div>
+            <p className="text-center text-gray-600 mb-4">締め処理を行いますか？</p>
+            <div className="flex gap-3">
+              <button
+                onClick={onCancel}
+                disabled={processing}
+                className="flex-1 py-3 rounded-xl border-2 border-gray-300 font-semibold active:bg-gray-100 disabled:opacity-50"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={processing}
+                className="flex-1 py-3 rounded-xl bg-red-500 text-white font-semibold active:bg-red-600 disabled:opacity-50"
+              >
+                {processing ? '処理中...' : 'OK 締め'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // フロアマップ画面（カスタムレイアウト対応）
+    // ============================================
+    const FloorMapPage = ({ seats, customers, orders, visits, users, onSelectSeat, onRefresh, currentTime }) => {
+      // currentTimeはAppから受け取る（10秒ごとに更新される）
+
+      // 席をタイプ別に分類
+      const counterSeats = seats.filter(s => s.seat_type === 'counter').sort((a, b) => a.display_order - b.display_order);
+      const tableSeats = seats.filter(s => s.seat_type && s.seat_type !== 'counter').sort((a, b) => a.display_order - b.display_order);
+
+      const occupiedCount = seats.filter(s => s.occupied).length;
+
+      // 今日の売上（内訳付き）
+      // 今日の売上（全てオーダーベースで集計）
+      const todayOrders = orders.filter(o => new Date(o.ordered_at).toDateString() === new Date().toDateString());
+      const todayCustomerTotal = todayOrders.filter(o => !o.order_type || o.order_type === 'customer').reduce((sum, o) => sum + o.price, 0);
+      const todayChargeTotal = todayOrders.filter(o => o.order_type === 'charge').reduce((sum, o) => sum + o.price, 0);
+      const todayStaffDrinkTotal = todayOrders.filter(o => o.order_type === 'staff_drink').reduce((sum, o) => sum + o.price, 0);
+
+      const todayTotal = todayCustomerTotal + todayChargeTotal + todayStaffDrinkTotal;
+
+      const getCustomer = (seat) => seat.customer_id ? customers.find(c => c.id === seat.customer_id) : null;
+      const getVisit = (seat) => seat.visit_id ? visits.find(v => v.id === seat.visit_id) : null;
+
+      // 代表席かどうか判定（visitのseat_idが代表席）
+      const isPrimarySeat = (seat) => {
+        if (!seat.visit_id) return false;
+        const visit = visits.find(v => v.id === seat.visit_id);
+        return visit?.seat_id === seat.id;
+      };
+
+      // 代表席のIDを取得
+      const getPrimarySeatId = (seat) => {
+        if (!seat.visit_id) return null;
+        const visit = visits.find(v => v.id === seat.visit_id);
+        return visit?.seat_id || null;
+      };
+
+      // 同じグループの席を取得
+      const getGroupSeats = (seat) => {
+        if (!seat.visit_id) return [];
+        return seats.filter(s => s.visit_id === seat.visit_id);
+      };
+
+      // グループの色（visit_idからハッシュで色を決定）
+      const groupColors = ['purple', 'pink', 'cyan', 'orange', 'lime', 'amber', 'teal', 'rose'];
+      const getGroupColor = (seat) => {
+        if (!seat.visit_id) return null;
+        const groupSeats = getGroupSeats(seat);
+        if (groupSeats.length <= 1) return null; // 1人なら色なし
+        // visit_idから色を決定
+        const hash = seat.visit_id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
+        return groupColors[hash % groupColors.length];
+      };
+
+      // 席ごとの合計（代表席のみに表示、連れ席は0）
+      const getSeatTotal = (seat) => {
+        const visit = visits.find(v => v.id === seat.visit_id);
+        if (!visit) return 0;
+        // 代表席でない場合は0を返す（表示用）
+        if (visit.seat_id !== seat.id) return 0;
+        return orders.filter(o => o.visit_id === visit.id).reduce((sum, o) => sum + o.price, 0);
+      };
+
+      // グループ全体の合計を取得（どの席からでも）
+      const getGroupTotal = (seat) => {
+        const visit = visits.find(v => v.id === seat.visit_id);
+        if (!visit) return 0;
+        return orders.filter(o => o.visit_id === visit.id).reduce((sum, o) => sum + o.price, 0);
+      };
+
+      return (
+        <div className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-800 p-3 pb-24">
+          {/* ヘッダー */}
+          <div className="bg-white rounded-2xl p-4 mb-3 shadow-lg">
+            <div className="flex justify-between items-center">
+              <div>
+                <h1 className="text-xl font-bold text-gray-800">🍸 SHUFF <span className="text-sm text-gray-400">v5.0</span></h1>
+                <p className="text-gray-500 text-xs">
+                  {new Date().getMonth() + 1}月{new Date().getDate()}日（{['日','月','火','水','木','金','土'][new Date().getDay()]}）営業中
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={onRefresh} className="p-2 rounded-lg hover:bg-gray-100 text-xl active:bg-gray-200">🔄</button>
+                <div className="text-right">
+                  <p className="text-xl font-bold text-blue-600">{occupiedCount}<span className="text-sm text-gray-400">/{seats.length}</span></p>
+                  <p className="text-lg font-bold text-green-600">¥{todayTotal.toLocaleString()}</p>
+                </div>
+              </div>
+            </div>
+            {/* 売上内訳 */}
+            <div className="flex justify-end gap-3 mt-2 text-xs text-gray-500">
+              <span>注文 ¥{todayCustomerTotal.toLocaleString()}</span>
+              <span>チャージ ¥{todayChargeTotal.toLocaleString()}</span>
+              <span className="text-pink-500">スタドリ ¥{todayStaffDrinkTotal.toLocaleString()}</span>
+            </div>
+          </div>
+
+          {/* 凡例 */}
+          <div className="bg-white rounded-xl p-2 mb-3 shadow">
+            <div className="flex justify-around text-xs">
+              <div className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-yellow-100 border border-yellow-400"></div><span>VIP</span></div>
+              <div className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-blue-100 border border-blue-400"></div><span>常連</span></div>
+              <div className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-green-100 border border-green-400"></div><span>新規</span></div>
+              <div className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-gray-200 border border-gray-300"></div><span>空席</span></div>
+            </div>
+          </div>
+
+          {/* カウンターエリア */}
+          <div className="bg-white rounded-2xl p-4 mb-3 shadow-lg">
+            <div className="relative">
+              {/* カウンター（U字型を表現） */}
+              <div className="bg-amber-800 rounded-2xl p-3 mb-2">
+                <div className="bg-amber-700 rounded-xl h-8 flex items-center justify-center">
+                  <span className="text-amber-200 text-xs font-semibold">BAR COUNTER</span>
+                </div>
+              </div>
+
+              {/* カウンター席 */}
+              <div className="flex justify-center gap-1 flex-wrap">
+                {counterSeats.map(seat => (
+                  <CounterSeat
+                    key={seat.id}
+                    seat={seat}
+                    customer={getCustomer(seat)}
+                    visit={getVisit(seat)}
+                    seatTotal={getSeatTotal(seat)}
+                    groupTotal={getGroupTotal(seat)}
+                    isPrimary={isPrimarySeat(seat)}
+                    primarySeatId={getPrimarySeatId(seat)}
+                    groupColor={getGroupColor(seat)}
+                    onSelect={onSelectSeat}
+                    currentTime={currentTime}
+                  />
+                ))}
+              </div>
+              <p className="text-center text-xs text-gray-400 mt-2">
+                カウンター（{counterSeats.filter(s=>s.occupied).length}/{counterSeats.length}）
+              </p>
+            </div>
+          </div>
+
+          {/* テーブルエリア */}
+          {tableSeats.length > 0 && (
+            <div className="bg-white rounded-2xl p-4 shadow-lg">
+              <p className="text-sm font-semibold text-gray-700 mb-3">🍽️ テーブル席</p>
+              <div className="flex justify-around flex-wrap gap-3">
+                {tableSeats.map(seat => (
+                  <TableSeat
+                    key={seat.id}
+                    seat={seat}
+                    customer={getCustomer(seat)}
+                    visit={getVisit(seat)}
+                    seatTotal={getSeatTotal(seat)}
+                    groupTotal={getGroupTotal(seat)}
+                    isPrimary={isPrimarySeat(seat)}
+                    primarySeatId={getPrimarySeatId(seat)}
+                    groupColor={getGroupColor(seat)}
+                    onSelect={onSelectSeat}
+                    currentTime={currentTime}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* スタッフドリンクバック（当日） */}
+          {(() => {
+            const staffDrinkOrders = todayOrders.filter(o => o.order_type === 'staff_drink');
+            if (staffDrinkOrders.length === 0) return null;
+            // スタッフ別に集計
+            const staffStats = {};
+            staffDrinkOrders.forEach(o => {
+              if (!staffStats[o.staff_id]) staffStats[o.staff_id] = { count: 0, total: 0 };
+              staffStats[o.staff_id].count++;
+              staffStats[o.staff_id].total += o.price;
+            });
+            return (
+              <div className="bg-pink-500 rounded-2xl p-4 mt-3 shadow-lg text-white">
+                <div className="flex justify-between items-center mb-2">
+                  <h3 className="font-semibold text-sm">🥂 本日のスタッフドリンク</h3>
+                  <div className="text-xl font-bold">¥{todayStaffDrinkTotal.toLocaleString()}</div>
+                </div>
+                <div className="space-y-1">
+                  {Object.entries(staffStats).map(([staffId, stat]) => {
+                    const staff = users.find(u => u.id === staffId);
+                    return (
+                      <div key={staffId} className="flex justify-between text-sm text-pink-100">
+                        <span>{staff?.name || '不明'}</span>
+                        <span>{stat.count}杯 / ¥{stat.total.toLocaleString()}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      );
+    };
+
+    // ============================================
+    // 顧客詳細画面（席選択時）
+    // ============================================
+    const CustomerDetailPage = ({ customer, seat, visit, orders, onBack, onAddOrder, onEdit, onCheckout, onRefresh, currentTime, onDeleteOrder }) => {
+      // currentTimeはAppから受け取る（10秒ごとに更新される）
+
+      const visitOrders = orders.filter(o => o.visit_id === visit?.id);
+      // 注文合計（チャージ以外）
+      // 全てオーダーベースで集計
+      const customerOrderTotal = visitOrders.filter(o => !o.order_type || o.order_type === 'customer').reduce((sum, o) => sum + o.price, 0);
+      const chargeTotal = visitOrders.filter(o => o.order_type === 'charge').reduce((sum, o) => sum + o.price, 0);
+      const staffDrinkTotal = visitOrders.filter(o => o.order_type === 'staff_drink').reduce((sum, o) => sum + o.price, 0);
+      const duration = visit?.seated_at ? Math.floor((currentTime - new Date(visit.seated_at).getTime()) / 60000) : 0;
+      const partySize = visit?.party_size || 1;
+      const grandTotal = customerOrderTotal + chargeTotal + staffDrinkTotal;
+
+      // この席が代表席かどうか
+      const isPrimary = visit?.seat_id === seat.id;
+      const primarySeatId = visit?.seat_id;
+
+      return (
+        <div className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-800 p-3 pb-24">
+          <button onClick={onBack} className="bg-white rounded-xl px-4 py-2 mb-3 shadow flex items-center gap-2 active:bg-gray-100">
+            ← 戻る
+          </button>
+
+          <div className="bg-white rounded-2xl p-4 mb-3 shadow-lg">
+            <div className="flex justify-between items-start">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <h1 className="text-xl font-bold">{customer.name}</h1>
+                  <span className={`px-2 py-0.5 rounded-full text-xs text-white ${getStatusColor(customer.status)}`}>{customer.status}</span>
+                  {customer.gender && <span className="text-xs text-gray-400">{customer.gender}</span>}
+                </div>
+                <p className="text-gray-500 text-sm">
+                  {seat.id}
+                  {!isPrimary && primarySeatId && <span className="text-purple-500"> → {primarySeatId}（代表）</span>}
+                  {' '}｜ {partySize > 1 ? `${partySize}名 ｜ ` : ''}{duration}分経過
+                </p>
+                {customer.age_range && <p className="text-gray-400 text-xs mt-1">{customer.age_range}</p>}
+              </div>
+              <button onClick={onRefresh} className="text-xl p-1">🔄</button>
+            </div>
+          </div>
+
+          {/* グループ（連れ席）表示 */}
+          {partySize > 1 && (
+            <div className={`rounded-xl p-3 mb-3 ${isPrimary ? 'bg-purple-500 text-white' : 'bg-purple-100 border-2 border-purple-400'}`}>
+              <div className="flex items-center justify-between">
+                <span className={`text-sm font-semibold ${isPrimary ? 'text-white' : 'text-purple-700'}`}>
+                  👥 {partySize}名グループ
+                </span>
+                {isPrimary ? (
+                  <span className="text-xs bg-white text-purple-600 px-2 py-1 rounded-full font-semibold">代表席</span>
+                ) : (
+                  <span className="text-xs text-purple-600 font-semibold">会計は {primarySeatId} に集約</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 合計金額（内訳付き） */}
+          <div className="bg-green-500 rounded-2xl p-4 mb-3 shadow-lg text-white">
+            <div className="flex justify-between items-center">
+              <span className="font-semibold">現在の合計</span>
+              <span className="text-2xl font-bold">¥{grandTotal.toLocaleString()}</span>
+            </div>
+            <div className="flex justify-end gap-3 mt-1 text-sm text-green-100">
+              <span>注文 ¥{customerOrderTotal.toLocaleString()}</span>
+              <span>チャージ ¥{chargeTotal.toLocaleString()}</span>
+              {staffDrinkTotal > 0 && <span>スタドリ ¥{staffDrinkTotal.toLocaleString()}</span>}
+            </div>
+          </div>
+
+          {(customer.favorite || customer.appearance || customer.notes) && (
+            <div className="bg-white rounded-2xl p-4 mb-3 shadow-lg">
+              <h2 className="font-semibold mb-2 text-sm">⭐ 顧客メモ</h2>
+              {customer.appearance && <p className="text-xs bg-purple-50 p-2 rounded mb-2"><span className="font-semibold">特徴:</span> {customer.appearance}</p>}
+              {customer.favorite && <p className="text-xs bg-yellow-50 p-2 rounded mb-2"><span className="font-semibold">好み:</span> {customer.favorite}</p>}
+              {customer.notes && <p className="text-xs bg-gray-50 p-2 rounded"><span className="font-semibold">メモ:</span> {customer.notes}</p>}
+            </div>
+          )}
+
+          <div className="bg-white rounded-2xl p-4 mb-3 shadow-lg">
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="font-semibold text-sm">📝 注文履歴</h2>
+              <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">⏱️ チャージ自動追加</span>
+            </div>
+            {visitOrders.length > 0 ? (
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {visitOrders.map((o, i) => (
+                  <div key={o.id || i} className={`flex justify-between items-center text-sm border-b pb-1 ${o.order_type === 'staff_drink' ? 'text-pink-600' : o.order_type === 'charge' ? 'text-amber-600' : ''}`}>
+                    <span className="flex-1">
+                      <span className="text-gray-400 mr-2 text-xs">{formatTime(o.ordered_at)}</span>
+                      {o.item}
+                      {o.order_type === 'staff_drink' && <span className="ml-1 text-xs">🥂</span>}
+                      {o.order_type === 'charge' && <span className="ml-1 text-xs">⏱️</span>}
+                    </span>
+                    <span className="font-semibold mr-2">¥{o.price.toLocaleString()}</span>
+                    <button
+                      onClick={() => {
+                        if (confirm(`「${o.item}」を削除しますか？`)) {
+                          onDeleteOrder(o.id);
+                        }
+                      }}
+                      className="text-red-400 hover:text-red-600 text-xs px-1"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-gray-400 text-center py-2 text-sm">注文なし</p>}
+            <button onClick={onAddOrder} className="w-full mt-3 bg-blue-500 text-white py-2.5 rounded-xl font-semibold active:bg-blue-600">
+              ＋ 注文追加
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <button onClick={onEdit} className="bg-gray-700 text-white py-3 rounded-xl font-semibold active:bg-gray-800">✏️ 編集</button>
+            <button onClick={onCheckout} className="bg-orange-500 text-white py-3 rounded-xl font-semibold active:bg-orange-600">🚪 会計 ¥{grandTotal.toLocaleString()}</button>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // ダッシュボード（売上）
+    // ============================================
+    const DashboardPage = ({ orders, visits, customers, onRefresh }) => {
+      const today = new Date();
+      const todayStr = today.toDateString();
+
+      const todayOrders = orders.filter(o => new Date(o.ordered_at).toDateString() === todayStr);
+      const todayTotal = todayOrders.reduce((sum, o) => sum + o.price, 0);
+      const todayCustomers = new Set(todayOrders.map(o => o.customer_id)).size;
+
+      const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const weekOrders = orders.filter(o => new Date(o.ordered_at) >= weekAgo);
+      const weekTotal = weekOrders.reduce((sum, o) => sum + o.price, 0);
+
+      const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+      const monthOrders = orders.filter(o => new Date(o.ordered_at) >= monthStart);
+      const monthTotal = monthOrders.reduce((sum, o) => sum + o.price, 0);
+
+      const customerTotals = {};
+      orders.forEach(o => { customerTotals[o.customer_id] = (customerTotals[o.customer_id] || 0) + o.price; });
+      const ranking = Object.entries(customerTotals)
+        .map(([id, total]) => ({ customer: customers.find(c => c.id === id), total }))
+        .filter(r => r.customer)
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 10);
+
+      return (
+        <div className="min-h-screen bg-gray-100 p-3 pb-24">
+          <div className="flex justify-between items-center mb-3">
+            <h1 className="text-xl font-bold">📊 売上ダッシュボード</h1>
+            <button onClick={onRefresh} className="text-xl p-1">🔄</button>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="bg-white rounded-xl p-3 shadow text-center">
+              <p className="text-xs text-gray-500">本日</p>
+              <p className="text-lg font-bold text-green-600">¥{todayTotal.toLocaleString()}</p>
+              <p className="text-xs text-gray-400">{todayCustomers}組</p>
+            </div>
+            <div className="bg-white rounded-xl p-3 shadow text-center">
+              <p className="text-xs text-gray-500">今週</p>
+              <p className="text-lg font-bold text-blue-600">¥{weekTotal.toLocaleString()}</p>
+            </div>
+            <div className="bg-white rounded-xl p-3 shadow text-center">
+              <p className="text-xs text-gray-500">今月</p>
+              <p className="text-lg font-bold text-purple-600">¥{monthTotal.toLocaleString()}</p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl p-4 shadow">
+            <h2 className="font-semibold mb-3 text-sm">🏆 顧客ランキング（累計）</h2>
+            {ranking.length > 0 ? ranking.map((r, i) => (
+              <div key={r.customer.id} className="flex justify-between items-center py-2 border-b last:border-0">
+                <div className="flex items-center gap-2">
+                  <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold
+                    ${i === 0 ? 'bg-yellow-400 text-white' : i === 1 ? 'bg-gray-400 text-white' : i === 2 ? 'bg-orange-400 text-white' : 'bg-gray-200'}`}>
+                    {i + 1}
+                  </span>
+                  <span className="text-sm font-medium">{r.customer.name}</span>
+                </div>
+                <span className="font-bold text-green-600 text-sm">¥{r.total.toLocaleString()}</span>
+              </div>
+            )) : <p className="text-gray-400 text-center py-4 text-sm">データなし</p>}
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // スタッフ売上ページ（スタドリ）
+    // ============================================
+    const StaffSalesPage = ({ orders, users, onRefresh }) => {
+      const [period, setPeriod] = useState('today'); // today, week, month, all
+
+      // 期間フィルタリング
+      const getFilteredOrders = () => {
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+        return orders.filter(o => {
+          if (o.order_type !== 'staff_drink') return false;
+          const orderDate = new Date(o.ordered_at);
+
+          switch (period) {
+            case 'today':
+              return orderDate >= today;
+            case 'week':
+              const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+              return orderDate >= weekAgo;
+            case 'month':
+              const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+              return orderDate >= monthAgo;
+            default:
+              return true;
+          }
+        });
+      };
+
+      // スタッフ別集計
+      const getStaffStats = () => {
+        const filtered = getFilteredOrders();
+        const stats = {};
+
+        filtered.forEach(o => {
+          if (!o.staff_id) return;
+          if (!stats[o.staff_id]) {
+            stats[o.staff_id] = { count: 0, total: 0 };
+          }
+          stats[o.staff_id].count++;
+          stats[o.staff_id].total += o.price;
+        });
+
+        // ソート（売上順）
+        return Object.entries(stats)
+          .map(([staffId, stat]) => ({
+            staffId,
+            staff: users.find(u => u.id === staffId),
+            ...stat
+          }))
+          .sort((a, b) => b.total - a.total);
+      };
+
+      const staffStats = getStaffStats();
+      const totalAmount = staffStats.reduce((sum, s) => sum + s.total, 0);
+      const totalCount = staffStats.reduce((sum, s) => sum + s.count, 0);
+
+      return (
+        <div className="min-h-screen bg-gradient-to-b from-pink-100 to-white p-3 pb-24">
+          <div className="flex justify-between items-center mb-3">
+            <h1 className="text-xl font-bold">🥂 スタッフ売上</h1>
+            <button onClick={onRefresh} className="text-xl p-1">🔄</button>
+          </div>
+
+          {/* 期間選択 */}
+          <div className="flex gap-2 mb-4">
+            {[
+              { value: 'today', label: '今日' },
+              { value: 'week', label: '今週' },
+              { value: 'month', label: '今月' },
+              { value: 'all', label: '全期間' },
+            ].map(p => (
+              <button key={p.value} onClick={() => setPeriod(p.value)}
+                className={`flex-1 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  period === p.value
+                    ? 'bg-pink-500 text-white'
+                    : 'bg-white text-gray-600 border'
+                }`}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          {/* 合計 */}
+          <div className="bg-pink-500 rounded-2xl p-6 mb-4 text-white shadow-lg">
+            <div className="text-center">
+              <p className="text-pink-200 text-sm">スタドリ合計</p>
+              <p className="text-4xl font-bold">¥{totalAmount.toLocaleString()}</p>
+              <p className="text-pink-200 text-sm mt-1">{totalCount}杯</p>
+            </div>
+          </div>
+
+          {/* スタッフ別ランキング */}
+          <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
+            <div className="bg-pink-100 px-4 py-3">
+              <h2 className="font-semibold text-pink-800">スタッフ別ランキング</h2>
+            </div>
+            <div className="divide-y">
+              {staffStats.length > 0 ? (
+                staffStats.map((stat, idx) => (
+                  <div key={stat.staffId} className="flex items-center justify-between p-4">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white ${
+                        idx === 0 ? 'bg-yellow-500' :
+                        idx === 1 ? 'bg-gray-400' :
+                        idx === 2 ? 'bg-amber-600' : 'bg-gray-200 text-gray-600'
+                      }`}>
+                        {idx + 1}
+                      </div>
+                      <div>
+                        <p className="font-semibold">{stat.staff?.name || '不明'}</p>
+                        <p className="text-xs text-gray-500">{stat.count}杯</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-bold text-pink-600">¥{stat.total.toLocaleString()}</p>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="p-8 text-center text-gray-400">
+                  <p>データがありません</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // 顧客一覧
+    // ============================================
+    const CustomersPage = ({ customers, orders, onRefresh, onEditCustomer }) => {
+      const [search, setSearch] = useState('');
+      const filtered = customers.filter(c =>
+        c.name.toLowerCase().includes(search.toLowerCase()) ||
+        (c.name_kana && c.name_kana.toLowerCase().includes(search.toLowerCase())) ||
+        (c.appearance && c.appearance.toLowerCase().includes(search.toLowerCase()))
+      );
+
+      const customerTotals = {};
+      orders.forEach(o => { customerTotals[o.customer_id] = (customerTotals[o.customer_id] || 0) + o.price; });
+
+      return (
+        <div className="min-h-screen bg-gray-100 p-3 pb-24">
+          <div className="flex justify-between items-center mb-3">
+            <h1 className="text-xl font-bold">👥 顧客一覧</h1>
+            <button onClick={onRefresh} className="text-xl p-1">🔄</button>
+          </div>
+          <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+            className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 mb-3" placeholder="名前・特徴で検索..." />
+          <div className="bg-white rounded-xl shadow overflow-hidden">
+            {filtered.length > 0 ? filtered.map(c => (
+              <button key={c.id} onClick={() => onEditCustomer(c)}
+                className="w-full p-3 border-b last:border-0 flex justify-between items-center text-left active:bg-gray-50">
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-sm">{c.name}</span>
+                    <span className={`px-1.5 py-0.5 rounded-full text-xs text-white ${getStatusColor(c.status)}`}>{c.status}</span>
+                  </div>
+                  <p className="text-xs text-gray-400">{c.favorite || '好み未登録'}</p>
+                </div>
+                <span className="font-bold text-green-600 text-sm">¥{(customerTotals[c.id] || 0).toLocaleString()}</span>
+              </button>
+            )) : <p className="text-gray-400 text-center py-8 text-sm">顧客なし</p>}
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // シフト管理画面
+    // ============================================
+    const ShiftPage = ({ users, shiftRequests, workingStaff, setWorkingStaff, onRefresh }) => {
+      // === 状態管理 ===
+      const [activeTab, setActiveTab] = useState('submit');
+      const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
+      const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+
+      // 希望提出用
+      const [selectedStaffId, setSelectedStaffId] = useState('');
+      const [selectedDates, setSelectedDates] = useState(new Map()); // Map<dateStr, {start, end}>
+      const [submitting, setSubmitting] = useState(false);
+
+      // シフト確定用
+      const [editedShifts, setEditedShifts] = useState({}); // {dateStr: {staffId: {checked, start, end}}}
+      const [confirmedDates, setConfirmedDates] = useState(new Set());
+
+      // === ユーティリティ関数 ===
+
+      // 日付を "YYYY-MM-DD" 形式に正規化
+      const toDateStr = (input) => {
+        if (!input) return '';
+        if (input instanceof Date) {
+          return `${input.getFullYear()}-${String(input.getMonth() + 1).padStart(2, '0')}-${String(input.getDate()).padStart(2, '0')}`;
+        }
+        const str = String(input).split('T')[0];
+        const [y, m, d] = str.split('-');
+        return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+      };
+
+      // 時間を "HH:MM" 形式に正規化（"18:00:00" → "18:00"）
+      const toTimeStr = (input) => {
+        if (!input) return '19:00';
+        const parts = String(input).split(':');
+        return `${parts[0].padStart(2, '0')}:${parts[1] || '00'}`;
+      };
+
+      // === 定数 ===
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayStr = toDateStr(today);
+
+      const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+      const firstDayOfWeek = new Date(currentYear, currentMonth, 1).getDay();
+
+      const TIME_OPTIONS_START = ['18:00', '19:00', '20:00', '21:00', '22:00'];
+      const TIME_OPTIONS_END = ['22:00', '23:00', '24:00', '25:00', '26:00', '27:00'];
+
+      const staffList = users.filter(u => u.role === 'staff' || u.role === 'owner');
+
+      // === データ取得ヘルパー ===
+      const getStaffName = (staffId) => {
+        const user = users.find(u => u.id === staffId);
+        return user?.name || '不明';
+      };
+
+      const getRequestsForDate = (dateStr) => {
+        return shiftRequests.filter(r => toDateStr(r.work_date) === dateStr);
+      };
+
+      // 深夜時間を24+形式に変換（01:00→25:00、02:00→26:00）
+      const toDisplayTime = (timeStr, startTimeStr) => {
+        const time = toTimeStr(timeStr);
+        const [endHour] = time.split(':').map(Number);
+        const [startHour] = toTimeStr(startTimeStr).split(':').map(Number);
+        // 終了時間が開始時間より小さい場合は翌日（24+表示）
+        if (endHour < startHour && endHour < 12) {
+          return `${endHour + 24}:00`;
+        }
+        return time;
+      };
+
+      // リクエストから希望時間を取得（24+形式で表示）
+      const getOriginalTime = (req) => {
+        const start = toTimeStr(req.start_time);
+        const end = toDisplayTime(req.end_time, req.start_time);
+        return { start, end };
+      };
+
+      // 編集状態を取得（なければ希望時間をデフォルトに）
+      const getShiftState = (dateStr, req) => {
+        const edited = editedShifts[dateStr]?.[req.staff_id];
+        if (edited) return edited;
+        const orig = getOriginalTime(req);
+        return { checked: true, start: orig.start, end: orig.end };
+      };
+
+      // === 希望提出タブの操作 ===
+      const toggleDateSelection = (dateStr) => {
+        setSelectedDates(prev => {
+          const next = new Map(prev);
+          if (next.has(dateStr)) {
+            next.delete(dateStr);
+          } else {
+            next.set(dateStr, { start: '19:00', end: '24:00' });
+          }
+          return next;
+        });
+      };
+
+      const updateSelectedTime = (dateStr, field, value) => {
+        setSelectedDates(prev => {
+          const next = new Map(prev);
+          const current = next.get(dateStr) || { start: '19:00', end: '24:00' };
+          next.set(dateStr, { ...current, [field]: value });
+          return next;
+        });
+      };
+
+      const removeSelectedDate = (dateStr) => {
+        setSelectedDates(prev => {
+          const next = new Map(prev);
+          next.delete(dateStr);
+          return next;
+        });
+      };
+
+      // 24時を超える時間を有効なTIME形式に変換（25:00→01:00:00）
+      const convertToValidTime = (timeStr) => {
+        const [hours, minutes] = timeStr.split(':').map(Number);
+        const validHours = hours >= 24 ? hours - 24 : hours;
+        return `${String(validHours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
+      };
+
+      const submitShiftRequest = async () => {
+        if (!selectedStaffId) {
+          alert('スタッフを選択してください');
+          return;
+        }
+        if (selectedDates.size === 0) {
+          alert('日付を選択してください');
+          return;
+        }
+
+        console.log('[シフト送信] staff_id:', selectedStaffId);
+        console.log('[シフト送信] 選択日数:', selectedDates.size);
+
+        setSubmitting(true);
+        try {
+          for (const [dateStr, times] of selectedDates) {
+            const payload = {
+              staff_id: selectedStaffId,
+              work_date: dateStr,
+              start_time: convertToValidTime(times.start),
+              end_time: convertToValidTime(times.end)
+            };
+            console.log('[シフト送信] payload:', payload);
+
+            const { error } = await supabase.from('shift_requests').insert([payload]);
+            if (error) {
+              console.error('[シフト送信] エラー:', error);
+              throw new Error(error);
+            }
+          }
+          const staffName = getStaffName(selectedStaffId);
+          alert(`${staffName}さんのシフト希望（${selectedDates.size}件）を送信しました！`);
+          setSelectedDates(new Map());
+          setSelectedStaffId('');
+          onRefresh();
+        } catch (err) {
+          console.error('[シフト送信] 例外:', err);
+          alert('送信エラー: ' + (err.message || String(err)));
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      // === シフト確定タブの操作 ===
+      const toggleStaffCheck = (dateStr, staffId, req) => {
+        const current = getShiftState(dateStr, req);
+        setEditedShifts(prev => ({
+          ...prev,
+          [dateStr]: {
+            ...prev[dateStr],
+            [staffId]: { ...current, checked: !current.checked }
+          }
+        }));
+      };
+
+      const updateConfirmTime = (dateStr, staffId, req, field, value) => {
+        const current = getShiftState(dateStr, req);
+        setEditedShifts(prev => ({
+          ...prev,
+          [dateStr]: {
+            ...prev[dateStr],
+            [staffId]: { ...current, [field]: value }
+          }
+        }));
+      };
+
+      const confirmDay = (dateStr) => {
+        const requests = getRequestsForDate(dateStr);
+        const checkedStaffIds = requests
+          .filter(req => getShiftState(dateStr, req).checked)
+          .map(req => req.staff_id);
+
+        setConfirmedDates(prev => new Set([...prev, dateStr]));
+
+        if (dateStr === todayStr) {
+          setWorkingStaff(checkedStaffIds);
+          alert(`本日の出勤スタッフを${checkedStaffIds.length}名に設定しました`);
+        } else {
+          alert(`${formatDateFull(dateStr)}のシフトを確定しました（${checkedStaffIds.length}名）`);
+        }
+      };
+
+      const deleteRequest = async (requestId) => {
+        if (!confirm('この希望を削除しますか？')) return;
+        await supabase.from('shift_requests').delete().eq('id', requestId);
+        onRefresh();
+      };
+
+      // === 月ナビゲーション ===
+      const prevMonth = () => {
+        if (currentMonth === 0) {
+          setCurrentMonth(11);
+          setCurrentYear(y => y - 1);
+        } else {
+          setCurrentMonth(m => m - 1);
+        }
+      };
+
+      const nextMonth = () => {
+        if (currentMonth === 11) {
+          setCurrentMonth(0);
+          setCurrentYear(y => y + 1);
+        } else {
+          setCurrentMonth(m => m + 1);
+        }
+      };
+
+      // === 希望がある日のリスト ===
+      const datesWithRequests = [];
+      for (let i = 1; i <= daysInMonth; i++) {
+        const d = new Date(currentYear, currentMonth, i);
+        const dateStr = toDateStr(d);
+        const requests = getRequestsForDate(dateStr);
+        if (requests.length > 0) {
+          datesWithRequests.push({
+            date: d,
+            dateStr,
+            requests,
+            isPast: d < today
+          });
+        }
+      }
+
+      // === レンダリング ===
+      return (
+        <div className="min-h-screen bg-gray-100 p-3 pb-24">
+          {/* ヘッダー */}
+          <div className="flex justify-between items-center mb-3">
+            <h1 className="text-xl font-bold">📅 シフト管理</h1>
+            <button onClick={onRefresh} className="text-xl p-1">🔄</button>
+          </div>
+
+          {/* タブ切り替え */}
+          <div className="flex gap-2 mb-3">
+            <button onClick={() => setActiveTab('submit')}
+              className={`flex-1 py-2 rounded-xl font-semibold text-sm ${activeTab === 'submit' ? 'bg-blue-500 text-white' : 'bg-white'}`}>
+              希望提出
+            </button>
+            <button onClick={() => setActiveTab('confirm')}
+              className={`flex-1 py-2 rounded-xl font-semibold text-sm ${activeTab === 'confirm' ? 'bg-green-500 text-white' : 'bg-white'}`}>
+              シフト確定
+            </button>
+          </div>
+
+          {activeTab === 'submit' ? (
+            /* ========== 希望提出タブ ========== */
+            <div className="bg-white rounded-xl p-4 shadow">
+              {/* スタッフ選択 */}
+              <div className="mb-4">
+                <label className="block text-sm font-semibold mb-1">スタッフ</label>
+                <select
+                  value={selectedStaffId}
+                  onChange={(e) => setSelectedStaffId(e.target.value)}
+                  className="w-full border-2 border-gray-200 rounded-xl px-3 py-3 bg-white"
+                >
+                  <option value="">-- 選択してください --</option>
+                  {staffList.map(staff => (
+                    <option key={staff.id} value={staff.id}>{staff.name}</option>
+                  ))}
+                </select>
+                {staffList.length === 0 && (
+                  <p className="text-xs text-orange-500 mt-1">※ 設定画面でスタッフを登録してください</p>
+                )}
+              </div>
+
+              {/* カレンダー */}
+              <div className="mb-4">
+                <div className="flex justify-between items-center mb-2">
+                  <button onClick={prevMonth} className="p-2 rounded-full bg-gray-100">◀</button>
+                  <span className="font-bold">{currentYear}年{currentMonth + 1}月</span>
+                  <button onClick={nextMonth} className="p-2 rounded-full bg-gray-100">▶</button>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1 text-center text-xs mb-1">
+                  {['日', '月', '火', '水', '木', '金', '土'].map((d, i) => (
+                    <div key={d} className={`py-1 font-semibold ${i === 0 ? 'text-red-500' : i === 6 ? 'text-blue-500' : ''}`}>{d}</div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-7 gap-1">
+                  {Array(firstDayOfWeek).fill(null).map((_, i) => <div key={`empty-${i}`}></div>)}
+                  {Array.from({ length: daysInMonth }, (_, i) => {
+                    const day = i + 1;
+                    const d = new Date(currentYear, currentMonth, day);
+                    const dateStr = toDateStr(d);
+                    const isPast = d < today;
+                    const isSelected = selectedDates.has(dateStr);
+                    const dow = d.getDay();
+                    return (
+                      <button
+                        key={day}
+                        onClick={() => !isPast && toggleDateSelection(dateStr)}
+                        disabled={isPast}
+                        className={`aspect-square rounded-lg flex items-center justify-center text-sm font-medium
+                          ${isPast ? 'text-gray-300' : isSelected ? 'bg-blue-500 text-white' : 'bg-gray-100'}
+                          ${!isPast && !isSelected && dow === 0 ? 'text-red-500' : ''}
+                          ${!isPast && !isSelected && dow === 6 ? 'text-blue-500' : ''}`}
+                      >
+                        {day}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 選択した日付の時間設定 */}
+              {selectedDates.size > 0 && (
+                <div className="mb-4 bg-blue-50 rounded-xl p-3">
+                  <p className="text-sm font-semibold text-blue-700 mb-3">🕐 勤務時間を設定（{selectedDates.size}件）</p>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {Array.from(selectedDates.entries())
+                      .sort((a, b) => a[0].localeCompare(b[0]))
+                      .map(([dateStr, times]) => (
+                        <div key={dateStr} className="flex items-center gap-2 bg-white rounded-lg p-2">
+                          <span className="text-sm font-medium min-w-[70px]">{formatDateFull(dateStr)}</span>
+                          <select
+                            value={times.start}
+                            onChange={(e) => updateSelectedTime(dateStr, 'start', e.target.value)}
+                            className="border rounded px-2 py-1 text-sm flex-1"
+                          >
+                            {TIME_OPTIONS_START.map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
+                          <span className="text-gray-400">〜</span>
+                          <select
+                            value={times.end}
+                            onChange={(e) => updateSelectedTime(dateStr, 'end', e.target.value)}
+                            className="border rounded px-2 py-1 text-sm flex-1"
+                          >
+                            {TIME_OPTIONS_END.map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
+                          <button onClick={() => removeSelectedDate(dateStr)} className="text-red-400 hover:text-red-600 px-1">✕</button>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 送信ボタン */}
+              <button
+                onClick={submitShiftRequest}
+                disabled={submitting || !selectedStaffId || selectedDates.size === 0}
+                className="w-full py-3 rounded-xl bg-blue-500 text-white font-semibold disabled:opacity-50"
+              >
+                {submitting ? '送信中...' : 'シフト希望を送信'}
+              </button>
+            </div>
+          ) : (
+            /* ========== シフト確定タブ ========== */
+            <div className="space-y-3">
+              {/* 月ナビゲーション */}
+              <div className="bg-white rounded-xl p-3 shadow">
+                <div className="flex justify-between items-center">
+                  <button onClick={prevMonth} className="p-2 rounded-full bg-gray-100">◀</button>
+                  <span className="font-bold">{currentYear}年{currentMonth + 1}月</span>
+                  <button onClick={nextMonth} className="p-2 rounded-full bg-gray-100">▶</button>
+                </div>
+              </div>
+
+              {datesWithRequests.length === 0 ? (
+                <div className="bg-white rounded-xl p-8 shadow text-center text-gray-400">
+                  この月の希望はありません
+                </div>
+              ) : (
+                datesWithRequests.map(({ date, dateStr, requests, isPast }) => {
+                  const isToday = dateStr === todayStr;
+                  const isConfirmed = confirmedDates.has(dateStr);
+
+                  return (
+                    <div key={dateStr} className={`bg-white rounded-xl shadow overflow-hidden ${isPast ? 'opacity-60' : ''}`}>
+                      {/* 日付ヘッダー */}
+                      <div className={`px-4 py-3 flex justify-between items-center ${isToday ? 'bg-green-50' : 'bg-gray-50'}`}>
+                        <div>
+                          <span className={`font-bold ${isToday ? 'text-green-700' : ''}`}>
+                            {isToday && '📍 '}{formatDateFull(dateStr)}
+                            <span className={`ml-1 ${date.getDay() === 0 ? 'text-red-500' : date.getDay() === 6 ? 'text-blue-500' : 'text-gray-400'}`}>
+                              （{['日','月','火','水','木','金','土'][date.getDay()]}）
+                            </span>
+                          </span>
+                          {isConfirmed && <span className="ml-2 text-green-600 text-sm">✓ 確定済み</span>}
+                        </div>
+                        {!isPast && (
+                          <button
+                            onClick={() => confirmDay(dateStr)}
+                            className={`px-4 py-1 rounded-lg text-sm font-semibold text-white ${isToday ? 'bg-green-500' : 'bg-blue-500'}`}
+                          >
+                            {isConfirmed ? '再確定' : '確定'}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* スタッフ一覧（コンパクト版） */}
+                      <div className="divide-y">
+                        {requests.map(req => {
+                          const state = getShiftState(dateStr, req);
+                          const orig = getOriginalTime(req);
+                          const isChanged = state.start !== orig.start || state.end !== orig.end;
+
+                          // ドロップダウンオプション（希望時間を含む）
+                          const startOpts = TIME_OPTIONS_START.includes(orig.start)
+                            ? TIME_OPTIONS_START
+                            : [...TIME_OPTIONS_START, orig.start].sort();
+                          const endOpts = TIME_OPTIONS_END.includes(orig.end)
+                            ? TIME_OPTIONS_END
+                            : [...TIME_OPTIONS_END, orig.end].sort();
+
+                          return (
+                            <div key={req.id} className={`px-4 py-3 flex items-center gap-2 flex-wrap ${isPast ? 'pointer-events-none' : ''}`}>
+                              <input
+                                type="checkbox"
+                                checked={state.checked}
+                                onChange={() => toggleStaffCheck(dateStr, req.staff_id, req)}
+                                className="w-4 h-4 rounded"
+                                disabled={isPast}
+                              />
+                              <span className={`font-medium text-sm min-w-[60px] ${state.checked ? '' : 'text-gray-400'}`}>
+                                {getStaffName(req.staff_id)}
+                              </span>
+                              <span className="text-gray-400 text-xs">
+                                希望 {orig.start}-{orig.end}
+                              </span>
+                              <span className="text-gray-300">→</span>
+                              <select
+                                value={state.start}
+                                onChange={(e) => updateConfirmTime(dateStr, req.staff_id, req, 'start', e.target.value)}
+                                className={`border rounded px-1 py-0.5 text-xs ${isChanged ? 'border-orange-400 bg-orange-50' : ''}`}
+                                disabled={isPast}
+                              >
+                                {startOpts.map(t => <option key={t} value={t}>{t}</option>)}
+                              </select>
+                              <span className="text-gray-400 text-xs">-</span>
+                              <select
+                                value={state.end}
+                                onChange={(e) => updateConfirmTime(dateStr, req.staff_id, req, 'end', e.target.value)}
+                                className={`border rounded px-1 py-0.5 text-xs ${isChanged ? 'border-orange-400 bg-orange-50' : ''}`}
+                                disabled={isPast}
+                              >
+                                {endOpts.map(t => <option key={t} value={t}>{t}</option>)}
+                              </select>
+                              {isChanged && <span className="text-orange-500 text-xs font-medium">変更</span>}
+                              <button
+                                onClick={() => deleteRequest(req.id)}
+                                className="text-red-300 hover:text-red-500 text-xs ml-auto"
+                                disabled={isPast}
+                              >
+                                削除
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // ============================================
+    // メニュー管理コンポーネント
+    // ============================================
+    const MenuManager = ({ menuItems, onRefresh }) => {
+      const [showEditor, setShowEditor] = useState(false);
+      const [editingItem, setEditingItem] = useState(null);
+      const [newName, setNewName] = useState('');
+      const [newPrice, setNewPrice] = useState('');
+      const [newCategory, setNewCategory] = useState('ドリンク');
+      const [saving, setSaving] = useState(false);
+      const [importing, setImporting] = useState(false);
+
+      const categories = ['ドリンク', 'フード', 'ボトル', 'その他'];
+
+      // CSVインポート処理
+      const handleCSVImport = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setImporting(true);
+        try {
+          const text = await file.text();
+          const lines = text.split('\n').filter(line => line.trim());
+
+          // ヘッダー行をスキップ（最初の行が「名前」「商品名」等を含む場合）
+          const startIdx = lines[0].includes('名前') || lines[0].includes('商品') || lines[0].includes('name') ? 1 : 0;
+
+          let imported = 0;
+          for (let i = startIdx; i < lines.length; i++) {
+            const parts = lines[i].split(',').map(p => p.trim().replace(/"/g, ''));
+            if (parts.length >= 2) {
+              const name = parts[0];
+              const price = parseInt(parts[1].replace(/[¥,]/g, ''));
+              const category = parts[2] || 'ドリンク';
+
+              if (name && !isNaN(price)) {
+                await supabase.from('menu_items').insert([{
+                  name,
+                  price,
+                  category: categories.includes(category) ? category : 'その他',
+                  is_active: true,
+                  display_order: menuItems.length + imported + 1
+                }]);
+                imported++;
+              }
+            }
+          }
+
+          alert(`${imported}件のメニューをインポートしました`);
+          onRefresh();
+        } catch (err) {
+          alert('インポートに失敗しました: ' + err.message);
+        } finally {
+          setImporting(false);
+          e.target.value = ''; // 同じファイルを再選択可能に
+        }
+      };
+
+      const handleAddItem = async () => {
+        if (!newName.trim() || !newPrice) { alert('名前と価格を入力してください'); return; }
+        setSaving(true);
+        await supabase.from('menu_items').insert([{
+          name: newName.trim(),
+          price: parseInt(newPrice),
+          category: newCategory,
+          is_active: true,
+          display_order: menuItems.length + 1
+        }]);
+        setNewName('');
+        setNewPrice('');
+        setSaving(false);
+        onRefresh();
+      };
+
+      const handleUpdateItem = async (item, updates) => {
+        setSaving(true);
+        await supabase.from('menu_items').update(updates).eq('id', item.id);
+        setSaving(false);
+        setEditingItem(null);
+        onRefresh();
+      };
+
+      const handleDeleteItem = async (item) => {
+        if (!confirm(`「${item.name}」を削除しますか？`)) return;
+        await supabase.from('menu_items').delete().eq('id', item.id);
+        onRefresh();
+      };
+
+      const handleToggleActive = async (item) => {
+        await supabase.from('menu_items').update({ is_active: !item.is_active }).eq('id', item.id);
+        onRefresh();
+      };
+
+      // カテゴリ別にグループ化
+      const groupedItems = menuItems.reduce((acc, item) => {
+        const cat = item.category || 'その他';
+        if (!acc[cat]) acc[cat] = [];
+        acc[cat].push(item);
+        return acc;
+      }, {});
+
+      return (
+        <div className="bg-white rounded-xl p-4 shadow mb-3">
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="font-semibold text-sm">📋 クイックメニュー ({menuItems.filter(m => m.is_active).length}件)</h2>
+            <div className="flex gap-2">
+              <label className="px-3 py-1 bg-green-500 text-white rounded-lg text-sm cursor-pointer">
+                {importing ? '読込中...' : 'CSV'}
+                <input type="file" accept=".csv,.txt" onChange={handleCSVImport} className="hidden" disabled={importing} />
+              </label>
+              <button onClick={() => setShowEditor(!showEditor)}
+                className="px-3 py-1 bg-blue-500 text-white rounded-lg text-sm">
+                {showEditor ? '閉じる' : '編集'}
+              </button>
+            </div>
+          </div>
+
+          {!showEditor ? (
+            <div className="flex flex-wrap gap-1">
+              {menuItems.filter(m => m.is_active).map(m => (
+                <span key={m.id} className="px-2 py-1 bg-gray-100 rounded-full text-xs">
+                  {m.name} ¥{m.price}
+                </span>
+              ))}
+              {menuItems.filter(m => m.is_active).length === 0 && (
+                <p className="text-gray-400 text-sm">メニューがありません</p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* 新規追加フォーム */}
+              <div className="bg-green-50 rounded-xl p-3">
+                <p className="text-sm font-semibold text-green-700 mb-2">➕ 新規追加</p>
+                <div className="flex gap-2 mb-2">
+                  <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)}
+                    className="flex-1 border-2 border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="商品名" />
+                  <input type="number" value={newPrice} onChange={(e) => setNewPrice(e.target.value)}
+                    className="w-24 border-2 border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="価格" />
+                </div>
+                <div className="flex gap-2">
+                  <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)}
+                    className="flex-1 border-2 border-gray-200 rounded-lg px-3 py-2 text-sm">
+                    {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <button onClick={handleAddItem} disabled={saving || !newName.trim() || !newPrice}
+                    className="px-4 py-2 bg-green-500 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+                    追加
+                  </button>
+                </div>
+              </div>
+
+              {/* カテゴリ別メニューリスト */}
+              {categories.map(category => {
+                const items = groupedItems[category] || [];
+                if (items.length === 0) return null;
+                return (
+                  <div key={category}>
+                    <p className="text-xs font-semibold text-gray-500 mb-1">{category}</p>
+                    <div className="space-y-1">
+                      {items.map(item => (
+                        <div key={item.id} className={`flex items-center justify-between p-2 rounded-lg ${item.is_active ? 'bg-gray-50' : 'bg-gray-200 opacity-60'}`}>
+                          {editingItem?.id === item.id ? (
+                            <EditMenuItemForm item={item} categories={categories}
+                              onSave={(updates) => handleUpdateItem(item, updates)}
+                              onCancel={() => setEditingItem(null)} />
+                          ) : (
+                            <>
+                              <div className="flex-1">
+                                <span className="font-medium text-sm">{item.name}</span>
+                                <span className="text-gray-500 text-sm ml-2">¥{item.price}</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <button onClick={() => handleToggleActive(item)}
+                                  className={`px-2 py-1 rounded text-xs ${item.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-300 text-gray-600'}`}>
+                                  {item.is_active ? 'ON' : 'OFF'}
+                                </button>
+                                <button onClick={() => setEditingItem(item)}
+                                  className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">✏️</button>
+                                <button onClick={() => handleDeleteItem(item)}
+                                  className="px-2 py-1 bg-red-100 text-red-700 rounded text-xs">🗑️</button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {menuItems.length === 0 && (
+                <p className="text-center text-gray-400 py-4">メニューがありません。上から追加してください。</p>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // メニュー項目編集フォーム
+    const EditMenuItemForm = ({ item, categories, onSave, onCancel }) => {
+      const [name, setName] = useState(item.name);
+      const [price, setPrice] = useState(item.price.toString());
+      const [category, setCategory] = useState(item.category || 'その他');
+
+      return (
+        <div className="flex-1 flex gap-2 items-center">
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+            className="flex-1 border rounded px-2 py-1 text-sm" />
+          <input type="number" value={price} onChange={(e) => setPrice(e.target.value)}
+            className="w-20 border rounded px-2 py-1 text-sm" />
+          <select value={category} onChange={(e) => setCategory(e.target.value)}
+            className="border rounded px-2 py-1 text-sm">
+            {categories.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <button onClick={() => onSave({ name, price: parseInt(price), category })}
+            className="px-2 py-1 bg-green-500 text-white rounded text-xs">保存</button>
+          <button onClick={onCancel}
+            className="px-2 py-1 bg-gray-300 rounded text-xs">×</button>
+        </div>
+      );
+    };
+
+    // ============================================
+    // 設定画面（席レイアウト設定追加）
+    // ============================================
+    const SettingsPage = ({ seats, menuItems, users, workingStaff, setWorkingStaff, onRefresh, onResetSeats, onCloseBusiness, businessDay }) => {
+      // 出勤スタッフの切り替え
+      const toggleWorkingStaff = (userId) => {
+        if (workingStaff.includes(userId)) {
+          setWorkingStaff(workingStaff.filter(id => id !== userId));
+        } else {
+          setWorkingStaff([...workingStaff, userId]);
+        }
+      };
+      const [showLayoutSetup, setShowLayoutSetup] = useState(false);
+      const [counterCount, setCounterCount] = useState('8');
+      const [tables, setTables] = useState([{ id: 'T1', name: 'T1' }, { id: 'T2', name: 'T2' }]);
+      const [newTableId, setNewTableId] = useState('');
+      const [saving, setSaving] = useState(false);
+
+      // スタッフ管理
+      const [showAddStaff, setShowAddStaff] = useState(false);
+      const [newStaffName, setNewStaffName] = useState('');
+      const [newStaffRole, setNewStaffRole] = useState('staff');
+      const [addingStaff, setAddingStaff] = useState(false);
+
+      const handleAddStaff = async () => {
+        if (!newStaffName.trim()) { alert('名前を入力してください'); return; }
+        setAddingStaff(true);
+        const { data, error } = await supabase.from('users').insert([{
+          name: newStaffName.trim(),
+          role: newStaffRole
+        }]);
+        setAddingStaff(false);
+        if (error) {
+          console.error('スタッフ追加エラー:', error);
+          alert('追加に失敗しました: ' + error);
+          return;
+        }
+        alert(`${newStaffName}さんを登録しました！`);
+        setNewStaffName('');
+        setNewStaffRole('staff');
+        setShowAddStaff(false);
+        onRefresh();
+      };
+
+      const handleDeleteStaff = async (userId, userName) => {
+        if (!confirm(`「${userName}」を削除しますか？`)) return;
+        const { error } = await supabase.from('users').delete().eq('id', userId);
+        if (error) {
+          console.error('スタッフ削除エラー:', error);
+          alert('削除に失敗しました: ' + error);
+          return;
+        }
+        onRefresh();
+      };
+
+      const handleAddTable = () => {
+        if (!newTableId.trim()) return;
+        if (tables.find(t => t.id === newTableId)) { alert('既に存在'); return; }
+        setTables([...tables, { id: newTableId, name: newTableId }]);
+        setNewTableId('');
+      };
+
+      const handleRemoveTable = (id) => {
+        setTables(tables.filter(t => t.id !== id));
+      };
+
+      const handleSaveLayout = async () => {
+        if (!confirm('席レイアウトを変更しますか？\n※現在の着席情報はリセットされます')) return;
+        setSaving(true);
+
+        // 既存の席を削除
+        for (const seat of seats) {
+          await supabase.from('seats').delete().eq('id', seat.id);
+        }
+
+        // 新しい席を作成
+        const newSeats = [];
+        const count = parseInt(counterCount) || 8;
+        for (let i = 1; i <= count; i++) {
+          newSeats.push({ id: `C${i}`, seat_type: 'counter', display_order: i });
+        }
+        tables.forEach((t, i) => {
+          newSeats.push({ id: t.id, seat_type: 'table', display_order: count + i + 1 });
+        });
+
+        for (const seat of newSeats) {
+          await supabase.from('seats').insert([seat]);
+        }
+
+        setSaving(false);
+        alert('席レイアウトを更新しました！');
+        setShowLayoutSetup(false);
+        onRefresh();
+      };
+
+      return (
+        <div className="min-h-screen bg-gray-100 p-3 pb-24">
+          <div className="flex justify-between items-center mb-3">
+            <h1 className="text-xl font-bold">⚙️ 設定</h1>
+            <button onClick={onRefresh} className="text-xl p-1">🔄</button>
+          </div>
+
+          {/* 営業終了（締め） */}
+          <div className="bg-red-50 border-2 border-red-200 rounded-xl p-4 shadow mb-3">
+            <div className="flex justify-between items-center">
+              <div>
+                <h2 className="font-semibold text-red-700">🔐 本日の営業</h2>
+                {businessDay && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    開店: {new Date(businessDay.opened_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={onCloseBusiness}
+                className="px-4 py-2 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 active:bg-red-700"
+              >
+                締め（営業終了）
+              </button>
+            </div>
+          </div>
+
+          {/* 本日の出勤スタッフ */}
+          <div className="bg-green-50 border-2 border-green-200 rounded-xl p-4 shadow mb-3">
+            <h2 className="font-semibold text-green-700 mb-3">👥 本日の出勤スタッフ</h2>
+            {users.length === 0 ? (
+              <p className="text-gray-400 text-sm">スタッフが登録されていません。下の「スタッフ管理」から追加してください。</p>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  {users.map(user => (
+                    <button key={user.id} onClick={() => toggleWorkingStaff(user.id)}
+                      className={`px-4 py-2 rounded-full text-sm font-semibold transition-all ${
+                        workingStaff.includes(user.id)
+                          ? 'bg-green-500 text-white shadow-md'
+                          : 'bg-white border-2 border-green-300 text-green-700'
+                      }`}>
+                      {workingStaff.includes(user.id) && '✓ '}{user.name}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-green-700">
+                    {workingStaff.length > 0
+                      ? `${workingStaff.length}名が出勤中`
+                      : '出勤スタッフを選択してください'}
+                  </span>
+                  {workingStaff.length > 0 && (
+                    <button onClick={() => setWorkingStaff([])} className="text-gray-400 hover:text-gray-600">
+                      クリア
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* 席レイアウト設定 */}
+          <div className="bg-white rounded-xl p-4 shadow mb-3">
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="font-semibold text-sm">🪑 席レイアウト</h2>
+              <div className="flex gap-2">
+                <button onClick={async () => {
+                  if (!confirm('席をデフォルト（C1〜C8 + T1, T2）にリセットしますか？')) return;
+                  setSaving(true);
+                  // 全席削除
+                  for (const seat of seats) {
+                    await supabase.from('seats').delete().eq('id', seat.id);
+                  }
+                  // デフォルト席作成
+                  const defaultSeats = [];
+                  for (let i = 1; i <= 8; i++) {
+                    defaultSeats.push({ id: `C${i}`, seat_type: 'counter', display_order: i, occupied: false });
+                  }
+                  defaultSeats.push({ id: 'T1', seat_type: 'table', display_order: 9, occupied: false });
+                  defaultSeats.push({ id: 'T2', seat_type: 'table', display_order: 10, occupied: false });
+                  for (const seat of defaultSeats) {
+                    await supabase.from('seats').insert([seat]);
+                  }
+                  setSaving(false);
+                  alert('デフォルトレイアウトに戻しました！');
+                  onRefresh();
+                }}
+                  className="px-3 py-1 bg-orange-500 text-white rounded-lg text-sm">
+                  デフォルト
+                </button>
+                <button onClick={() => setShowLayoutSetup(!showLayoutSetup)}
+                  className="px-3 py-1 bg-blue-500 text-white rounded-lg text-sm">
+                  {showLayoutSetup ? '閉じる' : '編集'}
+                </button>
+              </div>
+            </div>
+
+            {!showLayoutSetup ? (
+              <div className="text-sm text-gray-600">
+                <p>カウンター: {seats.filter(s => s.seat_type === 'counter').length}席</p>
+                <p>テーブル: {seats.filter(s => s.seat_type && s.seat_type !== 'counter').map(s => s.id).join(', ') || 'なし'}</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold mb-2">カウンター席数</label>
+                  <div className="flex gap-2">
+                    {[5,6,7,8,9,10,12].map(n => (
+                      <button key={n} onClick={() => setCounterCount(n.toString())}
+                        className={`w-10 h-10 rounded-lg font-bold ${counterCount === n.toString() ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}>
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold mb-2">テーブル席</label>
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {tables.map(t => (
+                      <div key={t.id} className="flex items-center gap-1 bg-gray-100 px-3 py-1 rounded-full">
+                        <span>{t.id}</span>
+                        <button onClick={() => handleRemoveTable(t.id)} className="text-red-500 ml-1">×</button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input type="text" value={newTableId} onChange={(e) => setNewTableId(e.target.value.toUpperCase())}
+                      className="flex-1 border-2 border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="テーブルID（例: T3）" />
+                    <button onClick={handleAddTable} className="px-4 py-2 bg-gray-200 rounded-lg text-sm">追加</button>
+                  </div>
+                </div>
+
+                <button onClick={handleSaveLayout} disabled={saving}
+                  className="w-full py-3 bg-green-500 text-white rounded-xl font-semibold disabled:opacity-50">
+                  {saving ? '保存中...' : 'レイアウトを保存'}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* メニュー管理 */}
+          <MenuManager menuItems={menuItems} onRefresh={onRefresh} />
+
+          {/* スタッフ管理 */}
+          <div className="bg-white rounded-xl p-4 shadow">
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="font-semibold text-sm">👤 スタッフ管理 ({users.length}名)</h2>
+              <button onClick={() => setShowAddStaff(!showAddStaff)}
+                className="px-3 py-1 bg-pink-500 text-white rounded-lg text-sm">
+                {showAddStaff ? '閉じる' : '＋ 追加'}
+              </button>
+            </div>
+
+            {/* スタッフ追加フォーム */}
+            {showAddStaff && (
+              <div className="bg-pink-50 rounded-xl p-4 mb-3">
+                <p className="text-sm font-semibold text-pink-700 mb-3">新しいスタッフを追加</p>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs text-pink-600 mb-1">名前</label>
+                    <input type="text" value={newStaffName} onChange={(e) => setNewStaffName(e.target.value)}
+                      className="w-full border-2 border-pink-200 rounded-lg px-3 py-2 bg-white" placeholder="例: 山田太郎" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-pink-600 mb-1">役割</label>
+                    <select value={newStaffRole} onChange={(e) => setNewStaffRole(e.target.value)}
+                      className="w-full border-2 border-pink-200 rounded-lg px-3 py-2 bg-white">
+                      <option value="staff">スタッフ</option>
+                      <option value="owner">オーナー</option>
+                    </select>
+                  </div>
+                  <button onClick={handleAddStaff} disabled={addingStaff || !newStaffName.trim()}
+                    className="w-full py-3 bg-pink-500 text-white rounded-lg font-semibold disabled:opacity-50 active:bg-pink-600">
+                    {addingStaff ? '登録中...' : '✓ スタッフを登録'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* スタッフ一覧 */}
+            <div className="space-y-1">
+              {users.map(u => (
+                <div key={u.id} className="flex justify-between items-center py-2 border-b last:border-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{u.name}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${u.role === 'owner' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100'}`}>
+                      {u.role === 'owner' ? 'オーナー' : 'スタッフ'}
+                    </span>
+                  </div>
+                  <button onClick={() => handleDeleteStaff(u.id, u.name)}
+                    className="text-red-400 hover:text-red-600 text-sm px-2">削除</button>
+                </div>
+              ))}
+              {users.length === 0 && (
+                <p className="text-center text-gray-400 py-2 text-sm">スタッフが登録されていません</p>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // 開店画面（入り）- スタッフ出勤選択付き
+    // ============================================
+    const OpeningScreen = ({ onOpen, users }) => {
+      const today = new Date();
+      const dateStr = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
+      const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][today.getDay()];
+      const [workingStaff, setWorkingStaff] = useState([]);
+
+      const toggleStaff = (userId) => {
+        if (workingStaff.includes(userId)) {
+          setWorkingStaff(workingStaff.filter(id => id !== userId));
+        } else {
+          setWorkingStaff([...workingStaff, userId]);
+        }
+      };
+
+      const handleOpen = () => {
+        onOpen(workingStaff);
+      };
+
+      return (
+        <div className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-800 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-8 shadow-2xl text-center max-w-sm w-full">
+            <h1 className="text-3xl font-bold text-gray-800 mb-2">🍸 SHUFF</h1>
+            <p className="text-gray-500 mb-6">バー管理システム v5.0</p>
+
+            <div className="bg-gray-100 rounded-2xl p-6 mb-4">
+              <p className="text-sm text-gray-500">本日</p>
+              <p className="text-2xl font-bold text-gray-800">{dateStr}</p>
+              <p className="text-lg text-gray-600">（{dayOfWeek}曜日）</p>
+            </div>
+
+            {/* スタッフ出勤選択 */}
+            {users && users.length > 0 && (
+              <div className="bg-pink-50 rounded-2xl p-4 mb-4 text-left">
+                <p className="text-sm font-semibold text-pink-700 mb-3">👥 本日の出勤スタッフ</p>
+                <div className="flex flex-wrap gap-2">
+                  {users.map(user => (
+                    <button
+                      key={user.id}
+                      onClick={() => toggleStaff(user.id)}
+                      className={`px-4 py-2 rounded-full text-sm font-semibold transition-all ${
+                        workingStaff.includes(user.id)
+                          ? 'bg-pink-500 text-white'
+                          : 'bg-white border-2 border-pink-300 text-pink-600'
+                      }`}
+                    >
+                      {user.name}
+                    </button>
+                  ))}
+                </div>
+                {workingStaff.length > 0 && (
+                  <p className="text-xs text-pink-600 mt-2">✓ {workingStaff.length}名選択中</p>
+                )}
+              </div>
+            )}
+
+            <button
+              onClick={handleOpen}
+              className="w-full bg-green-500 text-white text-xl font-bold py-4 px-8 rounded-2xl shadow-lg hover:bg-green-600 active:bg-green-700 transition-all"
+            >
+              🚪 開店（入り）
+            </button>
+
+            <p className="text-xs text-gray-400 mt-4">開店ボタンを押すと営業を開始します</p>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // メインアプリ
+    // ============================================
+    function App() {
+      const [seats, setSeats] = useState([]);
+      const [customers, setCustomers] = useState([]);
+      const [orders, setOrders] = useState([]);
+      const [visits, setVisits] = useState([]);
+      const [menuItems, setMenuItems] = useState([]);
+      const [users, setUsers] = useState([]);
+      const [shiftRequests, setShiftRequests] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(null);
+
+      const [currentPage, setCurrentPage] = useState('floor');
+      const [selectedSeat, setSelectedSeat] = useState(null);
+      const [showNewCustomer, setShowNewCustomer] = useState(false);
+      const [showAddOrder, setShowAddOrder] = useState(false);
+      const [editingCustomer, setEditingCustomer] = useState(null);
+      const [showCheckoutConfirm, setShowCheckoutConfirm] = useState(false);
+      const [checkoutData, setCheckoutData] = useState(null);
+      const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+      const [closeData, setCloseData] = useState(null);
+
+      // 営業管理（入り・締め）
+      const [isOpen, setIsOpen] = useState(false);
+      const [businessDay, setBusinessDay] = useState(null);
+      const [workingStaff, setWorkingStaff] = useState([]); // 本日の出勤スタッフID
+
+      // 時間経過表示用：10秒ごとに現在時刻を更新
+      const [currentTime, setCurrentTime] = useState(Date.now());
+      useEffect(() => {
+        const timer = setInterval(() => {
+          setCurrentTime(Date.now());
+        }, 10000); // 10秒ごと
+        return () => clearInterval(timer);
+      }, []);
+
+      // 自動チャージ追加：時間経過に応じてチャージを自動追加
+      const autoAddChargesRef = React.useRef(false); // 処理中フラグ
+      const lastChargeCheckRef = React.useRef(0); // 最後にチェックした時間
+
+      useEffect(() => {
+        if (!isOpen) return;
+
+        // ★ 処理中なら即座にリターン（Race Condition防止）
+        if (autoAddChargesRef.current) return;
+
+        // 1分以内に再実行しない（重複防止）
+        const now = Date.now();
+        if (now - lastChargeCheckRef.current < 60000) return;
+
+        // ★ フラグを即座に設定（async関数の外で！）
+        autoAddChargesRef.current = true;
+        lastChargeCheckRef.current = now;
+
+        const checkAndAddCharges = async () => {
+          try {
+            // ★ visitsもDBから直接取得（stateに依存しない）
+            const { data: latestVisits } = await supabase.from('visits').select('*');
+            const { data: latestOrders } = await supabase.from('orders').select('*');
+            if (!latestVisits || !latestOrders) return;
+
+            // アクティブな来店を取得
+            const activeVisits = latestVisits.filter(v => v.is_active && v.seated_at);
+
+            let hasChanges = false;
+
+            for (const visit of activeVisits) {
+              // visit.seat_id が代表席（primary seat）
+              const primarySeatId = visit.seat_id;
+              if (!primarySeatId) continue;
+
+              // 経過時間から必要なチャージ回数を計算（1時間ごと）
+              const elapsedMs = Date.now() - new Date(visit.seated_at).getTime();
+              const elapsedHours = Math.floor(elapsedMs / (60 * 60 * 1000)) + 1;
+
+              // 現在のチャージ回数（DBから取得した最新データで計算）
+              const chargeOrders = latestOrders.filter(o => o.visit_id === visit.id && o.order_type === 'charge');
+              const currentCharges = chargeOrders.length;
+
+              // 足りない分を追加（代表席に記録）
+              if (elapsedHours > currentCharges) {
+                const partySize = visit.party_size || 1;
+                const chargeAmount = CHARGE_PER_HOUR * partySize;
+
+                for (let h = currentCharges + 1; h <= elapsedHours; h++) {
+                  await supabase.from('orders').insert([{
+                    customer_id: visit.customer_id,
+                    seat_id: primarySeatId,
+                    visit_id: visit.id,
+                    item: `チャージ ${h}h（${partySize}名）`,
+                    price: chargeAmount,
+                    order_type: 'charge'
+                  }]);
+                  hasChanges = true;
+                }
+              }
+            }
+
+            // 変更があった場合のみデータを再取得
+            if (hasChanges) {
+              const { data: newOrders } = await supabase.from('orders').select('*');
+              if (newOrders) setOrders(newOrders);
+            }
+          } finally {
+            autoAddChargesRef.current = false;
+          }
+        };
+
+        checkAndAddCharges();
+      }, [currentTime, isOpen]); // ★ visits, seatsを依存配列から削除
+
+      const fetchData = async () => {
+        setLoading(true);
+        try {
+          const [seatsRes, customersRes, ordersRes, visitsRes, menuRes, usersRes, shiftReqRes, businessDaysRes] = await Promise.all([
+            supabase.from('seats').select('*'),
+            supabase.from('customers').select('*'),
+            supabase.from('orders').select('*'),
+            supabase.from('visits').select('*'),
+            supabase.from('menu_items').select('*'),
+            supabase.from('users').select('*'),
+            supabase.from('shift_requests').select('*'),
+            supabase.from('business_days').select('*').eq('business_date', new Date().toISOString().split('T')[0]).single(),
+          ]);
+
+          let seatsData = seatsRes.data || [];
+
+          // 席がない場合、デフォルトの席を作成
+          if (seatsData.length === 0) {
+            const defaultSeats = [];
+            for (let i = 1; i <= 8; i++) {
+              defaultSeats.push({ id: `C${i}`, seat_type: 'counter', display_order: i });
+            }
+            defaultSeats.push({ id: 'T1', seat_type: 'table', display_order: 9 });
+            defaultSeats.push({ id: 'T2', seat_type: 'table', display_order: 10 });
+
+            for (const seat of defaultSeats) {
+              await supabase.from('seats').insert([seat]);
+            }
+            const { data: newSeats } = await supabase.from('seats').select('*');
+            seatsData = newSeats || [];
+          }
+
+          setSeats(seatsData);
+          setCustomers(customersRes.data || []);
+          setOrders(ordersRes.data || []);
+          setVisits(visitsRes.data || []);
+          setMenuItems(menuRes.data || []);
+          setUsers(usersRes.data || []);
+          setShiftRequests(shiftReqRes.data || []);
+
+          // 営業日の状態を設定
+          if (businessDaysRes.data) {
+            setBusinessDay(businessDaysRes.data);
+            setIsOpen(businessDaysRes.data.is_open);
+          } else {
+            setBusinessDay(null);
+            setIsOpen(false);
+          }
+
+          setError(null);
+        } catch (err) {
+          setError('データ取得失敗: ' + err.message);
+        }
+        setLoading(false);
+      };
+
+      useEffect(() => { fetchData(); }, []);
+
+      // 開店処理（入り）- スタッフ出勤情報付き
+      const handleOpenBusiness = async (selectedStaff = []) => {
+        const today = new Date().toISOString().split('T')[0];
+        try {
+          // 出勤スタッフを保存
+          setWorkingStaff(selectedStaff);
+
+          // まず今日のレコードが存在するか確認
+          const { data: existing } = await supabase.from('business_days').select('*').eq('business_date', today).single();
+
+          if (existing) {
+            // 既に存在する場合は更新
+            await supabase.from('business_days').update({
+              opened_at: new Date().toISOString(),
+              is_open: true,
+              closed_at: null
+            }).eq('business_date', today);
+          } else {
+            // 新規作成
+            await supabase.from('business_days').insert([{
+              business_date: today,
+              opened_at: new Date().toISOString(),
+              is_open: true
+            }]);
+          }
+          await fetchData();
+        } catch (err) {
+          alert('開店処理に失敗: ' + err.message);
+        }
+      };
+
+      // 閉店処理（締め）- モーダル表示
+      const handleCloseBusiness = () => {
+        // 残客チェック
+        const occupiedSeats = seats.filter(s => s.occupied);
+        if (occupiedSeats.length > 0) {
+          alert(`まだ${occupiedSeats.length}組のお客様が残っています。\n全員退店後に締めを行ってください。`);
+          return;
+        }
+
+        // 今日の売上を計算
+        const todayOrders = orders.filter(o => new Date(o.ordered_at).toDateString() === new Date().toDateString());
+        const orderTotal = todayOrders.filter(o => !o.order_type || o.order_type === 'customer').reduce((sum, o) => sum + o.price, 0);
+        const chargeTotal = todayOrders.filter(o => o.order_type === 'charge').reduce((sum, o) => sum + o.price, 0);
+        const staffDrinkTotal = todayOrders.filter(o => o.order_type === 'staff_drink').reduce((sum, o) => sum + o.price, 0);
+        const todayVisits = visits.filter(v => v.seated_at && new Date(v.seated_at).toDateString() === new Date().toDateString());
+        const totalSales = orderTotal + chargeTotal + staffDrinkTotal;
+        const totalCustomers = todayVisits.length;
+
+        // モーダル用データをセット
+        setCloseData({
+          orderTotal,
+          chargeTotal,
+          staffDrinkTotal,
+          totalSales,
+          totalCustomers
+        });
+        setShowCloseConfirm(true);
+      };
+
+      // 実際の締め処理を実行
+      const executeCloseBusiness = async () => {
+        if (!closeData) return;
+        const { totalSales, totalCustomers } = closeData;
+
+        try {
+          const today = new Date().toISOString().split('T')[0];
+          await supabase.from('business_days').update({
+            closed_at: new Date().toISOString(),
+            is_open: false,
+            total_sales: totalSales,
+            total_customers: totalCustomers
+          }).eq('business_date', today);
+          await fetchData();
+          setShowCloseConfirm(false);
+          setCloseData(null);
+          alert('本日の営業を終了しました。お疲れ様でした！');
+        } catch (err) {
+          alert('締め処理に失敗: ' + err.message);
+          setShowCloseConfirm(false);
+          setCloseData(null);
+        }
+      };
+
+      const handleSelectSeat = (seat) => {
+        setSelectedSeat(seat);
+        if (!seat.occupied) setShowNewCustomer(true);
+      };
+
+      // 複数席対応：seatIdsは配列
+      const handleNewCustomer = async (data, seatIds, partySize = 1) => {
+        try {
+          // seatIdsが配列でない場合は配列に変換（後方互換性）
+          const seatIdArray = Array.isArray(seatIds) ? seatIds : [seatIds];
+          const primarySeatId = seatIdArray[0];
+
+          const { data: newCust } = await supabase.from('customers').insert([data]);
+          if (newCust?.[0]) {
+            const { data: newVisit } = await supabase.from('visits').insert([{
+              customer_id: newCust[0].id,
+              seat_id: primarySeatId,
+              is_active: true,
+              party_size: partySize,
+              seated_at: new Date().toISOString()
+            }]);
+            if (newVisit?.[0]) {
+              // 全ての席を更新
+              for (const sid of seatIdArray) {
+                await supabase.from('seats').update({
+                  occupied: true,
+                  customer_id: newCust[0].id,
+                  visit_id: newVisit[0].id,
+                  seated_at: new Date().toISOString()
+                }).eq('id', sid);
+              }
+
+              // 初回チャージを注文として記録（1時間分）
+              const chargeAmount = CHARGE_PER_HOUR * partySize;
+              await supabase.from('orders').insert([{
+                customer_id: newCust[0].id,
+                seat_id: primarySeatId,
+                visit_id: newVisit[0].id,
+                item: `チャージ 1h（${partySize}名）`,
+                price: chargeAmount,
+                order_type: 'charge'
+              }]);
+            }
+          }
+          await fetchData();
+          setShowNewCustomer(false);
+          setSelectedSeat(null);
+        } catch (err) { alert('登録失敗'); }
+      };
+
+      // 複数席対応：seatIdsは配列
+      const handleSelectExisting = async (customer, seatIds, partySize = 1) => {
+        try {
+          // seatIdsが配列でない場合は配列に変換（後方互換性）
+          const seatIdArray = Array.isArray(seatIds) ? seatIds : [seatIds];
+          const primarySeatId = seatIdArray[0];
+
+          console.log('着席処理開始:', { customer: customer.name, seatIds: seatIdArray, partySize });
+
+          // 1. 来店記録を作成（seated_atを含める）
+          let newVisit, visitError;
+          const now = new Date().toISOString();
+          const visitData = {
+            customer_id: customer.id,
+            seat_id: primarySeatId,
+            is_active: true,
+            party_size: partySize,
+            seated_at: now
+          };
+
+          const result1 = await supabase.from('visits').insert([visitData]);
+          newVisit = result1.data;
+          visitError = result1.error;
+
+          // party_sizeカラムがない場合はリトライ
+          if (visitError && visitError.includes('party_size')) {
+            console.log('party_sizeなしでリトライ');
+            const result2 = await supabase.from('visits').insert([{
+              customer_id: customer.id,
+              seat_id: primarySeatId,
+              is_active: true,
+              seated_at: now
+            }]);
+            newVisit = result2.data;
+            visitError = result2.error;
+          }
+
+          console.log('Visit insert結果:', { newVisit, visitError });
+
+          if (visitError) {
+            alert('来店記録の作成に失敗: ' + visitError);
+            return;
+          }
+
+          // 2. 全ての席を更新
+          const seatUpdate = {
+            occupied: true,
+            customer_id: customer.id,
+            visit_id: newVisit?.[0]?.id || null,
+            seated_at: now
+          };
+          for (const sid of seatIdArray) {
+            const { error: seatError } = await supabase.from('seats').update(seatUpdate).eq('id', sid);
+            if (seatError) console.log('Seat update error for', sid, ':', seatError);
+          }
+
+          // 3. 顧客の来店回数を更新
+          await supabase.from('customers').update({
+            total_visits: (customer.total_visits || 0) + 1,
+            last_visit_at: now
+          }).eq('id', customer.id);
+
+          // 4. 初回チャージを注文として記録（1時間分）
+          const chargeAmount = CHARGE_PER_HOUR * partySize;
+          await supabase.from('orders').insert([{
+            customer_id: customer.id,
+            seat_id: primarySeatId,
+            visit_id: newVisit?.[0]?.id || null,
+            item: `チャージ 1h（${partySize}名）`,
+            price: chargeAmount,
+            order_type: 'charge'
+          }]);
+
+          console.log('着席処理完了（チャージ記録済み）');
+          await fetchData();
+          setShowNewCustomer(false);
+          setSelectedSeat(null);
+        } catch (err) {
+          console.error('着席エラー:', err);
+          alert('着席失敗: ' + err.message);
+        }
+      };
+
+      const handleAddOrder = async (data) => {
+        await supabase.from('orders').insert([data]);
+        await fetchData();
+      };
+
+      // 注文削除
+      const handleDeleteOrder = async (orderId) => {
+        await supabase.from('orders').delete().eq('id', orderId);
+        await fetchData();
+      };
+
+      const handleUpdateCustomer = async (id, updates) => {
+        await supabase.from('customers').update(updates).eq('id', id);
+        await fetchData();
+      };
+
+      // 会計確認モーダルを表示
+      const handleCheckout = () => {
+        if (!selectedSeat) return;
+        const visit = visits.find(v => v.id === selectedSeat.visit_id);
+        const visitOrders = orders.filter(o => o.visit_id === visit?.id);
+        // 注文合計（オーダーベース）
+        const customerOrderTotal = visitOrders.filter(o => !o.order_type || o.order_type === 'customer').reduce((sum, o) => sum + o.price, 0);
+        const staffDrinkTotal = visitOrders.filter(o => o.order_type === 'staff_drink').reduce((sum, o) => sum + o.price, 0);
+        // チャージもオーダーベースで計算
+        const chargeOrders = visitOrders.filter(o => o.order_type === 'charge');
+        const chargeTotal = chargeOrders.reduce((sum, o) => sum + o.price, 0);
+        const grandTotal = customerOrderTotal + chargeTotal + staffDrinkTotal;
+        const partySize = visit?.party_size || 1;
+        const chargeHours = chargeOrders.length;
+
+        // モーダル用データをセット
+        setCheckoutData({
+          visit,
+          customerOrderTotal,
+          chargeTotal,
+          staffDrinkTotal,
+          grandTotal,
+          partySize,
+          chargeHours,
+          customerId: selectedSeat.customer_id
+        });
+        setShowCheckoutConfirm(true);
+      };
+
+      // 実際の会計処理を実行
+      const executeCheckout = async () => {
+        if (!checkoutData) return;
+        const { visit, grandTotal, customerId } = checkoutData;
+
+        try {
+          // 来店記録を更新
+          if (visit) await supabase.from('visits').update({
+            is_active: false,
+            left_at: new Date().toISOString(),
+            total_spent: grandTotal
+          }).eq('id', visit.id);
+          // 顧客の累計を更新
+          const customer = customers.find(c => c.id === customerId);
+          if (customer) {
+            // 曜日パターンを更新
+            const today = new Date().getDay();
+            const pattern = customer.visit_pattern || {};
+            pattern[today] = (pattern[today] || 0) + 1;
+            await supabase.from('customers').update({
+              total_spent: (customer.total_spent || 0) + grandTotal,
+              visit_pattern: pattern
+            }).eq('id', customer.id);
+          }
+          // 同じvisitに紐づく全ての席をリセット
+          const relatedSeats = seats.filter(s => s.visit_id === visit?.id);
+          for (const s of relatedSeats) {
+            await supabase.from('seats').update({ occupied: false, customer_id: null, visit_id: null, seated_at: null }).eq('id', s.id);
+          }
+          await fetchData();
+          setShowCheckoutConfirm(false);
+          setCheckoutData(null);
+          setSelectedSeat(null);
+        } catch (err) {
+          alert('退店失敗');
+          setShowCheckoutConfirm(false);
+          setCheckoutData(null);
+        }
+      };
+
+      if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white text-lg">読み込み中...</div>;
+      if (error) return (
+        <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 text-center">
+            <p className="text-red-500 mb-4">{error}</p>
+            <button onClick={fetchData} className="px-6 py-2 bg-blue-500 text-white rounded-xl">再試行</button>
+          </div>
+        </div>
+      );
+
+      // 開店前は操作不可 - 開店画面を表示
+      if (!isOpen) {
+        return <OpeningScreen onOpen={handleOpenBusiness} users={users} />;
+      }
+
+      if (selectedSeat?.occupied) {
+        const customer = customers.find(c => c.id === selectedSeat.customer_id);
+        const visit = visits.find(v => v.id === selectedSeat.visit_id);
+        if (customer) return (
+          <>
+            <CustomerDetailPage customer={customer} seat={selectedSeat} visit={visit} orders={orders}
+              onBack={() => setSelectedSeat(null)} onAddOrder={() => setShowAddOrder(true)}
+              onEdit={() => setEditingCustomer(customer)} onCheckout={handleCheckout} onRefresh={fetchData} currentTime={currentTime}
+              onDeleteOrder={handleDeleteOrder} />
+            {showAddOrder && <AddOrderModal customer={customer} seatId={visit?.seat_id || selectedSeat.id} visitId={visit?.id} menuItems={menuItems} users={users} workingStaff={workingStaff}
+              onClose={() => setShowAddOrder(false)} onSave={handleAddOrder} />}
+            {editingCustomer && <CustomerDetailModal customer={editingCustomer} onClose={() => setEditingCustomer(null)} onSave={handleUpdateCustomer} />}
+            {showCheckoutConfirm && <CheckoutConfirmModal data={checkoutData} onConfirm={executeCheckout} onCancel={() => { setShowCheckoutConfirm(false); setCheckoutData(null); }} />}
+            <NavBar currentPage={currentPage} onNavigate={(p) => { setCurrentPage(p); setSelectedSeat(null); }} />
+          </>
+        );
+      }
+
+      return (
+        <>
+          {currentPage === 'floor' && <FloorMapPage seats={seats} customers={customers} orders={orders} visits={visits} users={users} onSelectSeat={handleSelectSeat} onRefresh={fetchData} currentTime={currentTime} />}
+          {currentPage === 'dashboard' && <DashboardPage orders={orders} visits={visits} customers={customers} onRefresh={fetchData} />}
+          {currentPage === 'staff' && <StaffSalesPage orders={orders} users={users} onRefresh={fetchData} />}
+          {currentPage === 'shift' && <ShiftPage users={users} shiftRequests={shiftRequests} workingStaff={workingStaff} setWorkingStaff={setWorkingStaff} onRefresh={fetchData} />}
+          {currentPage === 'customers' && <CustomersPage customers={customers} orders={orders} onRefresh={fetchData} onEditCustomer={(c) => setEditingCustomer(c)} />}
+          {currentPage === 'settings' && <SettingsPage seats={seats} menuItems={menuItems} users={users} workingStaff={workingStaff} setWorkingStaff={setWorkingStaff} onRefresh={fetchData} onCloseBusiness={handleCloseBusiness} businessDay={businessDay} />}
+
+          {showNewCustomer && selectedSeat && (
+            <NewCustomerModal seat={selectedSeat} initialName="" customers={customers} allSeats={seats}
+              onClose={() => { setShowNewCustomer(false); setSelectedSeat(null); }}
+              onSave={handleNewCustomer} onSelectExisting={handleSelectExisting} />
+          )}
+          {editingCustomer && <CustomerDetailModal customer={editingCustomer} onClose={() => setEditingCustomer(null)} onSave={handleUpdateCustomer} />}
+          {showCloseConfirm && <CloseConfirmModal data={closeData} onConfirm={executeCloseBusiness} onCancel={() => { setShowCloseConfirm(false); setCloseData(null); }} />}
+          <NavBar currentPage={currentPage} onNavigate={setCurrentPage} />
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
