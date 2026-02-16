@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>SHUFF v5.0</title>
+  <title>SHUFF v6.1</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -853,13 +853,30 @@
       const [customPrice, setCustomPrice] = useState('');
       const [saving, setSaving] = useState(false);
 
+      // カテゴリータブ
+      const CATEGORY_ORDER = ['ウィスキー', 'カクテル', '焼酎', 'ビール', 'ワイン', 'シャンパン', 'ショット', 'ソフトドリンク', 'フード', 'キープボトル'];
+      const COCKTAIL_SUBS = ['ウォッカ', 'ジン', 'テキーラ', 'ラム', 'その他'];
+      const [activeCategory, setActiveCategory] = useState('ウィスキー');
+      const [activeCocktailSub, setActiveCocktailSub] = useState('ウォッカ');
+
       // カテゴリ別にグループ化
-      const groupedMenu = menuItems.filter(m => m.is_active).reduce((acc, item) => {
-        const cat = item.category || 'その他';
-        if (!acc[cat]) acc[cat] = [];
-        acc[cat].push(item);
-        return acc;
-      }, {});
+      const groupedMenu = useMemo(() => {
+        return menuItems.filter(m => m.is_active).reduce((acc, item) => {
+          const cat = item.category || 'その他';
+          if (!acc[cat]) acc[cat] = [];
+          acc[cat].push(item);
+          return acc;
+        }, {});
+      }, [menuItems]);
+
+      // 現在のカテゴリーの商品を取得
+      const currentItems = useMemo(() => {
+        const items = groupedMenu[activeCategory] || [];
+        if (activeCategory === 'カクテル') {
+          return items.filter(m => m.subcategory === activeCocktailSub);
+        }
+        return items.sort((a, b) => (a.display_order || 0) - (b.display_order || 0));
+      }, [groupedMenu, activeCategory, activeCocktailSub]);
 
       const handleSave = async () => {
         let item, price, order_type = orderType, staff_id = null;
@@ -899,10 +916,17 @@
         setIsBottleKeep(false);
       };
 
+      // カテゴリーの絵文字アイコン
+      const catIcon = (cat) => {
+        const icons = { 'ウィスキー': '🥃', 'カクテル': '🍸', '焼酎': '🍶', 'ビール': '🍺', 'ワイン': '🍷', 'シャンパン': '🥂', 'ショット': '🔥', 'ソフトドリンク': '🥤', 'フード': '🍽️', 'キープボトル': '🍾' };
+        return icons[cat] || '📦';
+      };
+
       return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl p-5 w-full max-w-md max-h-[85vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-3">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-50">
+          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[92vh] flex flex-col">
+            {/* ヘッダー */}
+            <div className="flex justify-between items-center p-4 pb-2">
               <div>
                 <h2 className="text-xl font-bold">📝 注文追加</h2>
                 <p className="text-gray-500 text-sm">{customer.name}さん</p>
@@ -911,7 +935,7 @@
             </div>
 
             {/* 注文タイプ切り替え */}
-            <div className="flex gap-2 mb-4">
+            <div className="flex gap-2 px-4 mb-3">
               <button onClick={() => setOrderType('customer')}
                 className={`flex-1 py-2 rounded-xl font-semibold text-sm ${orderType === 'customer' ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}>
                 🍺 お客様注文
@@ -922,94 +946,126 @@
               </button>
             </div>
 
-            {orderType === 'customer' ? (
-              <>
-                {/* メニュー選択（カテゴリ別） */}
-                {Object.entries(groupedMenu).map(([category, items]) => (
-                  <div key={category} className="mb-3">
-                    <p className="text-xs font-semibold text-gray-500 mb-1">{category}</p>
-                    <div className="flex flex-wrap gap-2">
-                      {items.map(m => (
-                        <button key={m.id} onClick={() => setSelectedMenu(m)}
-                          className={`px-3 py-2 rounded-xl text-sm border-2 transition-all
-                            ${selectedMenu?.id === m.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white'}`}>
-                          {m.name}<span className="text-gray-400 ml-1">¥{m.price}</span>
-                        </button>
-                      ))}
-                    </div>
+            {/* メインコンテンツ（スクロール可能エリア） */}
+            <div className="flex-1 overflow-y-auto px-4">
+              {orderType === 'customer' ? (
+                <>
+                  {/* カテゴリータブ（横スクロール） */}
+                  <div className="flex gap-1.5 overflow-x-auto pb-2 mb-3 -mx-1 px-1" style={{WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none'}}>
+                    {CATEGORY_ORDER.filter(cat => groupedMenu[cat]?.length > 0).map(cat => (
+                      <button key={cat} onClick={() => { setActiveCategory(cat); setSelectedMenu(null); if (cat === 'カクテル') setActiveCocktailSub('ウォッカ'); }}
+                        className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all
+                          ${activeCategory === cat ? 'bg-blue-500 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                        {catIcon(cat)} {cat}
+                      </button>
+                    ))}
                   </div>
-                ))}
 
-                {/* カスタム入力 */}
-                <div className="border-t pt-3 mt-3">
-                  <p className="text-xs font-semibold text-gray-500 mb-2">その他（手入力）</p>
-                  <div className="flex gap-2">
-                    <input type="text" value={customItem} onChange={(e) => { setCustomItem(e.target.value); setSelectedMenu(null); }}
-                      className="flex-1 border-2 border-gray-200 rounded-xl px-3 py-2 text-sm" placeholder="品目名" />
-                    <input type="number" value={customPrice} onChange={(e) => setCustomPrice(e.target.value)}
-                      className="w-24 border-2 border-gray-200 rounded-xl px-3 py-2 text-sm" placeholder="金額" />
-                  </div>
-                </div>
-              </>
-            ) : (
-              <>
-                {/* スタッフドリンク */}
-                <div className="bg-pink-50 rounded-xl p-4 space-y-4">
-                  <div>
-                    <label className="block text-sm font-semibold text-pink-700 mb-2">誰が飲んだ？</label>
-                    <div className="flex flex-wrap gap-2">
-                      {availableStaff.map(u => (
-                        <button key={u.id} onClick={() => setStaffId(u.id)}
-                          className={`px-4 py-2 rounded-full font-semibold transition-all ${
-                            staffId === u.id
-                              ? 'bg-pink-500 text-white'
-                              : 'bg-white border-2 border-pink-300 text-pink-600'
-                          }`}>
-                          {u.name}
-                        </button>
-                      ))}
+                  {/* カクテル用サブカテゴリータブ */}
+                  {activeCategory === 'カクテル' && (
+                    <div className="flex gap-1.5 overflow-x-auto pb-2 mb-3" style={{WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none'}}>
+                      {COCKTAIL_SUBS.map(sub => {
+                        const hasItems = (groupedMenu['カクテル'] || []).some(m => m.subcategory === sub);
+                        if (!hasItems) return null;
+                        return (
+                          <button key={sub} onClick={() => { setActiveCocktailSub(sub); setSelectedMenu(null); }}
+                            className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all
+                              ${activeCocktailSub === sub ? 'bg-indigo-500 text-white shadow-sm' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}>
+                            {sub}
+                          </button>
+                        );
+                      })}
                     </div>
-                    {availableStaff.length === 0 && (
-                      <p className="text-sm text-pink-400 mt-2">出勤スタッフが登録されていません</p>
+                  )}
+
+                  {/* 商品一覧 */}
+                  <div className="space-y-1.5 mb-3">
+                    {currentItems.map(m => (
+                      <button key={m.id} onClick={() => setSelectedMenu(m)}
+                        className={`w-full flex justify-between items-center px-3 py-2.5 rounded-xl text-sm border-2 transition-all
+                          ${selectedMenu?.id === m.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-100 bg-white hover:border-gray-200'}`}>
+                        <span className="font-medium text-left">{m.name}</span>
+                        <span className={`font-semibold flex-shrink-0 ml-2 ${selectedMenu?.id === m.id ? 'text-blue-600' : 'text-gray-500'}`}>¥{m.price.toLocaleString()}</span>
+                      </button>
+                    ))}
+                    {currentItems.length === 0 && (
+                      <p className="text-center text-gray-400 py-8 text-sm">このカテゴリーにはメニューがありません</p>
                     )}
                   </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-pink-700 mb-2">種類</label>
-                    <div className="flex gap-3">
-                      <button onClick={() => setIsBottleKeep(false)}
-                        className={`flex-1 py-3 rounded-xl font-semibold ${!isBottleKeep ? 'bg-pink-500 text-white' : 'bg-white border-2 border-pink-300'}`}>
-                        通常 ¥1,000
-                      </button>
-                      <button onClick={() => setIsBottleKeep(true)}
-                        className={`flex-1 py-3 rounded-xl font-semibold ${isBottleKeep ? 'bg-pink-500 text-white' : 'bg-white border-2 border-pink-300'}`}>
-                        ボトルキープ ¥500
-                      </button>
+
+                  {/* カスタム入力 */}
+                  <div className="border-t pt-3 mb-3">
+                    <p className="text-xs font-semibold text-gray-500 mb-2">その他（手入力）</p>
+                    <div className="flex gap-2">
+                      <input type="text" value={customItem} onChange={(e) => { setCustomItem(e.target.value); setSelectedMenu(null); }}
+                        className="flex-1 border-2 border-gray-200 rounded-xl px-3 py-2 text-sm" placeholder="品目名" />
+                      <input type="number" value={customPrice} onChange={(e) => setCustomPrice(e.target.value)}
+                        className="w-24 border-2 border-gray-200 rounded-xl px-3 py-2 text-sm" placeholder="金額" />
                     </div>
                   </div>
+                </>
+              ) : (
+                <>
+                  {/* スタッフドリンク */}
+                  <div className="bg-pink-50 rounded-xl p-4 space-y-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-pink-700 mb-2">誰が飲んだ？</label>
+                      <div className="flex flex-wrap gap-2">
+                        {availableStaff.map(u => (
+                          <button key={u.id} onClick={() => setStaffId(u.id)}
+                            className={`px-4 py-2 rounded-full font-semibold transition-all ${
+                              staffId === u.id
+                                ? 'bg-pink-500 text-white'
+                                : 'bg-white border-2 border-pink-300 text-pink-600'
+                            }`}>
+                            {u.name}
+                          </button>
+                        ))}
+                      </div>
+                      {availableStaff.length === 0 && (
+                        <p className="text-sm text-pink-400 mt-2">出勤スタッフが登録されていません</p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-pink-700 mb-2">種類</label>
+                      <div className="flex gap-3">
+                        <button onClick={() => setIsBottleKeep(false)}
+                          className={`flex-1 py-3 rounded-xl font-semibold ${!isBottleKeep ? 'bg-pink-500 text-white' : 'bg-white border-2 border-pink-300'}`}>
+                          通常 ¥1,000
+                        </button>
+                        <button onClick={() => setIsBottleKeep(true)}
+                          className={`flex-1 py-3 rounded-xl font-semibold ${isBottleKeep ? 'bg-pink-500 text-white' : 'bg-white border-2 border-pink-300'}`}>
+                          ボトルキープ ¥500
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* フッター（固定表示） */}
+            <div className="p-4 pt-2 border-t bg-white rounded-b-2xl">
+              {/* 選択中の表示 */}
+              {(selectedMenu || (customItem && customPrice) || (orderType === 'staff_drink' && staffId)) && (
+                <div className="mb-2 p-2.5 bg-green-50 rounded-xl">
+                  <p className="text-sm text-green-700 font-medium">
+                    {orderType === 'staff_drink'
+                      ? `${users.find(u => u.id === staffId)?.name || ''}のスタッフドリンク: ¥${(isBottleKeep ? 500 : 1000).toLocaleString()}`
+                      : selectedMenu
+                        ? `${selectedMenu.name}: ¥${selectedMenu.price.toLocaleString()}`
+                        : `${customItem}: ¥${parseInt(customPrice || 0).toLocaleString()}`
+                    }
+                  </p>
                 </div>
-              </>
-            )}
-
-            {/* 選択中の表示 */}
-            {(selectedMenu || (customItem && customPrice) || (orderType === 'staff_drink' && staffId)) && (
-              <div className="mt-4 p-3 bg-green-50 rounded-xl">
-                <p className="text-sm text-green-700">
-                  {orderType === 'staff_drink'
-                    ? `${users.find(u => u.id === staffId)?.name || ''}のスタッフドリンク: ¥${isBottleKeep ? 500 : 1000}`
-                    : selectedMenu
-                      ? `${selectedMenu.name}: ¥${selectedMenu.price}`
-                      : `${customItem}: ¥${customPrice}`
-                  }
-                </p>
+              )}
+              <div className="flex gap-3">
+                <button onClick={onClose} className="flex-1 py-3 rounded-xl border-2 border-gray-300 font-semibold">閉じる</button>
+                <button onClick={handleSave} disabled={saving}
+                  className="flex-1 py-3 rounded-xl bg-blue-500 text-white font-semibold disabled:opacity-50">
+                  {saving ? '追加中...' : '追加'}
+                </button>
               </div>
-            )}
-
-            <div className="flex gap-3 mt-4">
-              <button onClick={onClose} className="flex-1 py-3 rounded-xl border-2 border-gray-300 font-semibold">閉じる</button>
-              <button onClick={handleSave} disabled={saving}
-                className="flex-1 py-3 rounded-xl bg-blue-500 text-white font-semibold disabled:opacity-50">
-                {saving ? '追加中...' : '追加'}
-              </button>
             </div>
           </div>
         </div>
@@ -1282,7 +1338,7 @@
           <div className="bg-white rounded-2xl p-4 mb-3 shadow-lg">
             <div className="flex justify-between items-center">
               <div>
-                <h1 className="text-xl font-bold text-gray-800">🍸 SHUFF <span className="text-sm text-gray-400">v5.0</span></h1>
+                <h1 className="text-xl font-bold text-gray-800">🍸 SHUFF <span className="text-sm text-gray-400">v6.1</span></h1>
                 <p className="text-gray-500 text-xs">
                   {new Date().getMonth() + 1}月{new Date().getDate()}日（{['日','月','火','水','木','金','土'][new Date().getDay()]}）営業中
                 </p>
@@ -2805,7 +2861,7 @@
         <div className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-800 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-8 shadow-2xl text-center max-w-sm w-full">
             <h1 className="text-3xl font-bold text-gray-800 mb-2">🍸 SHUFF</h1>
-            <p className="text-gray-500 mb-6">バー管理システム v5.0</p>
+            <p className="text-gray-500 mb-6">バー管理システム v6.1</p>
 
             <div className="bg-gray-100 rounded-2xl p-6 mb-4">
               <p className="text-sm text-gray-500">本日</p>
