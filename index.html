@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>SHUFF v6.1</title>
+  <title>SHUFF v6.2</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -1135,16 +1135,24 @@
     // ============================================
     const CheckoutConfirmModal = ({ data, onConfirm, onCancel }) => {
       const [processing, setProcessing] = useState(false);
+      const [paymentMethod, setPaymentMethod] = useState(null); // '現金', 'カード', 'QR'
 
       if (!data) return null;
 
       const { customerOrderTotal, chargeTotal, staffDrinkTotal, grandTotal, partySize, chargeHours } = data;
 
       const handleConfirm = async () => {
+        if (!paymentMethod) { alert('決済方法を選択してください'); return; }
         setProcessing(true);
-        await onConfirm();
+        await onConfirm(paymentMethod);
         setProcessing(false);
       };
+
+      const paymentOptions = [
+        { key: '現金', icon: '💴', label: '現金' },
+        { key: 'カード', icon: '💳', label: 'カード' },
+        { key: 'QR', icon: '📱', label: 'QR' },
+      ];
 
       return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -1171,7 +1179,23 @@
                 <span className="font-bold text-green-600">¥{grandTotal.toLocaleString()}</span>
               </div>
             </div>
-            <p className="text-center text-gray-600 mb-4">退店処理を実行しますか？</p>
+
+            {/* 決済方法選択 */}
+            <div className="mb-4">
+              <p className="text-sm font-semibold text-gray-600 mb-2 text-center">決済方法</p>
+              <div className="flex gap-2">
+                {paymentOptions.map(opt => (
+                  <button key={opt.key} onClick={() => setPaymentMethod(opt.key)}
+                    className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-all
+                      ${paymentMethod === opt.key
+                        ? 'bg-green-500 text-white shadow-sm'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                    {opt.icon} {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="flex gap-3">
               <button
                 onClick={onCancel}
@@ -1182,8 +1206,9 @@
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={processing}
-                className="flex-1 py-3 rounded-xl bg-orange-500 text-white font-semibold active:bg-orange-600 disabled:opacity-50"
+                disabled={processing || !paymentMethod}
+                className={`flex-1 py-3 rounded-xl text-white font-semibold disabled:opacity-50
+                  ${paymentMethod ? 'bg-orange-500 active:bg-orange-600' : 'bg-gray-300'}`}
               >
                 {processing ? '処理中...' : 'OK 退店'}
               </button>
@@ -1264,7 +1289,7 @@
     // ============================================
     // フロアマップ画面（カスタムレイアウト対応）
     // ============================================
-    const FloorMapPage = ({ seats, customers, orders, visits, users, onSelectSeat, onRefresh, currentTime }) => {
+    const FloorMapPage = ({ seats, customers, orders, visits, users, onSelectSeat, onRefresh, currentTime, businessDay }) => {
       // currentTimeはAppから受け取る（10秒ごとに更新される）
 
       // 席をタイプ別に分類
@@ -1274,8 +1299,13 @@
       const occupiedCount = seats.filter(s => s.occupied).length;
 
       // 今日の売上（内訳付き）
-      // 今日の売上（全てオーダーベースで集計）
-      const todayOrders = orders.filter(o => new Date(o.ordered_at).toDateString() === new Date().toDateString());
+      // 営業日のopened_at以降の注文を「今日の売上」とする（24時超え対応）
+      const todayOrders = orders.filter(o => {
+        if (businessDay?.opened_at) {
+          return new Date(o.ordered_at) >= new Date(businessDay.opened_at);
+        }
+        return new Date(o.ordered_at).toDateString() === new Date().toDateString();
+      });
       const todayCustomerTotal = todayOrders.filter(o => !o.order_type || o.order_type === 'customer').reduce((sum, o) => sum + o.price, 0);
       const todayChargeTotal = todayOrders.filter(o => o.order_type === 'charge').reduce((sum, o) => sum + o.price, 0);
       const todayStaffDrinkTotal = todayOrders.filter(o => o.order_type === 'staff_drink').reduce((sum, o) => sum + o.price, 0);
@@ -1338,7 +1368,7 @@
           <div className="bg-white rounded-2xl p-4 mb-3 shadow-lg">
             <div className="flex justify-between items-center">
               <div>
-                <h1 className="text-xl font-bold text-gray-800">🍸 SHUFF <span className="text-sm text-gray-400">v6.1</span></h1>
+                <h1 className="text-xl font-bold text-gray-800">🍸 SHUFF <span className="text-sm text-gray-400">v6.2</span></h1>
                 <p className="text-gray-500 text-xs">
                   {new Date().getMonth() + 1}月{new Date().getDate()}日（{['日','月','火','水','木','金','土'][new Date().getDay()]}）営業中
                 </p>
@@ -1591,11 +1621,16 @@
     // ============================================
     // ダッシュボード（売上）
     // ============================================
-    const DashboardPage = ({ orders, visits, customers, onRefresh }) => {
+    const DashboardPage = ({ orders, visits, customers, businessDay, onRefresh }) => {
       const today = new Date();
-      const todayStr = today.toDateString();
 
-      const todayOrders = orders.filter(o => new Date(o.ordered_at).toDateString() === todayStr);
+      // 営業日のopened_at以降の注文を「今日の売上」とする（24時超え対応）
+      const todayOrders = orders.filter(o => {
+        if (businessDay?.opened_at) {
+          return new Date(o.ordered_at) >= new Date(businessDay.opened_at);
+        }
+        return new Date(o.ordered_at).toDateString() === today.toDateString();
+      });
       const todayTotal = todayOrders.reduce((sum, o) => sum + o.price, 0);
       const todayCustomers = new Set(todayOrders.map(o => o.customer_id)).size;
 
@@ -2861,7 +2896,7 @@
         <div className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-800 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-8 shadow-2xl text-center max-w-sm w-full">
             <h1 className="text-3xl font-bold text-gray-800 mb-2">🍸 SHUFF</h1>
-            <p className="text-gray-500 mb-6">バー管理システム v6.1</p>
+            <p className="text-gray-500 mb-6">バー管理システム v6.2</p>
 
             <div className="bg-gray-100 rounded-2xl p-6 mb-4">
               <p className="text-sm text-gray-500">本日</p>
@@ -3118,12 +3153,22 @@
           return;
         }
 
-        // 今日の売上を計算
-        const todayOrders = orders.filter(o => new Date(o.ordered_at).toDateString() === new Date().toDateString());
+        // 今日の売上を計算（営業日のopened_at以降、24時超え対応）
+        const todayOrders = orders.filter(o => {
+          if (businessDay?.opened_at) {
+            return new Date(o.ordered_at) >= new Date(businessDay.opened_at);
+          }
+          return new Date(o.ordered_at).toDateString() === new Date().toDateString();
+        });
         const orderTotal = todayOrders.filter(o => !o.order_type || o.order_type === 'customer').reduce((sum, o) => sum + o.price, 0);
         const chargeTotal = todayOrders.filter(o => o.order_type === 'charge').reduce((sum, o) => sum + o.price, 0);
         const staffDrinkTotal = todayOrders.filter(o => o.order_type === 'staff_drink').reduce((sum, o) => sum + o.price, 0);
-        const todayVisits = visits.filter(v => v.seated_at && new Date(v.seated_at).toDateString() === new Date().toDateString());
+        const todayVisits = visits.filter(v => {
+          if (businessDay?.opened_at) {
+            return v.seated_at && new Date(v.seated_at) >= new Date(businessDay.opened_at);
+          }
+          return v.seated_at && new Date(v.seated_at).toDateString() === new Date().toDateString();
+        });
         const totalSales = orderTotal + chargeTotal + staffDrinkTotal;
         const totalCustomers = todayVisits.length;
 
@@ -3341,16 +3386,17 @@
       };
 
       // 実際の会計処理を実行
-      const executeCheckout = async () => {
+      const executeCheckout = async (paymentMethod) => {
         if (!checkoutData) return;
         const { visit, grandTotal, customerId } = checkoutData;
 
         try {
-          // 来店記録を更新
+          // 来店記録を更新（決済方法を含む）
           if (visit) await supabase.from('visits').update({
             is_active: false,
             left_at: new Date().toISOString(),
-            total_spent: grandTotal
+            total_spent: grandTotal,
+            payment_method: paymentMethod
           }).eq('id', visit.id);
           // 顧客の累計を更新
           const customer = customers.find(c => c.id === customerId);
@@ -3415,8 +3461,8 @@
 
       return (
         <>
-          {currentPage === 'floor' && <FloorMapPage seats={seats} customers={customers} orders={orders} visits={visits} users={users} onSelectSeat={handleSelectSeat} onRefresh={fetchData} currentTime={currentTime} />}
-          {currentPage === 'dashboard' && <DashboardPage orders={orders} visits={visits} customers={customers} onRefresh={fetchData} />}
+          {currentPage === 'floor' && <FloorMapPage seats={seats} customers={customers} orders={orders} visits={visits} users={users} onSelectSeat={handleSelectSeat} onRefresh={fetchData} currentTime={currentTime} businessDay={businessDay} />}
+          {currentPage === 'dashboard' && <DashboardPage orders={orders} visits={visits} customers={customers} businessDay={businessDay} onRefresh={fetchData} />}
           {currentPage === 'staff' && <StaffSalesPage orders={orders} users={users} onRefresh={fetchData} />}
           {currentPage === 'shift' && <ShiftPage users={users} shiftRequests={shiftRequests} workingStaff={workingStaff} setWorkingStaff={setWorkingStaff} onRefresh={fetchData} />}
           {currentPage === 'customers' && <CustomersPage customers={customers} orders={orders} onRefresh={fetchData} onEditCustomer={(c) => setEditingCustomer(c)} />}
