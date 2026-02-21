@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>SHUFF v7.1</title>
+  <title>SHUFF v7.2</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -1543,7 +1543,7 @@
           <div className="bg-white rounded-2xl p-4 mb-3 shadow-lg">
             <div className="flex justify-between items-center">
               <div>
-                <h1 className="text-xl font-bold text-gray-800">🍸 SHUFF <span className="text-sm text-gray-400">v6.2</span></h1>
+                <h1 className="text-xl font-bold text-gray-800">🍸 SHUFF <span className="text-sm text-gray-400">v7.2</span></h1>
                 <p className="text-gray-500 text-xs">
                   {new Date().getMonth() + 1}月{new Date().getDate()}日（{['日','月','火','水','木','金','土'][new Date().getDay()]}）営業中
                 </p>
@@ -2390,7 +2390,7 @@
       const visitsByDate = useMemo(() => {
         const map = {};
         closedVisits.forEach(v => {
-          const dateStr = (v.left_at || v.checked_in_at || '').split('T')[0];
+          const dateStr = (v.left_at || v.seated_at || '').split('T')[0];
           if (!dateStr) return;
           if (!map[dateStr]) map[dateStr] = [];
           map[dateStr].push(v);
@@ -2404,7 +2404,7 @@
           name: customerMap[v.customer_id] || '不明',
           party: v.party_size || 1,
           sales: v.total_spent || 0,
-          payment: v.payment_method || 'cash',
+          payment: v.payment_method || '現金',
           receipt: v.receipt || false,
           items: (ordersByVisitId[v.id] || []).map(o => ({
             item: o.item,
@@ -2419,11 +2419,10 @@
         let cashCount=0,cardCount=0,qrCount=0,receiptCount=0;
         records.forEach(r => {
           total += r.sales; totalParty += r.party;
-          switch(r.payment) {
-            case 'cash': cash += r.sales; cashCount++; break;
-            case 'card': card += r.sales; cardCount++; break;
-            case 'qr': qr += r.sales; qrCount++; break;
-          }
+          const p = r.payment;
+          if (p === '現金' || p === 'cash') { cash += r.sales; cashCount++; }
+          else if (p === 'カード' || p === 'card') { card += r.sales; cardCount++; }
+          else if (p === 'QR' || p === 'qr') { qr += r.sales; qrCount++; }
           if (r.receipt) { receipt += r.sales; receiptCount++; }
         });
         return { total, cash, card, qr, receipt, count: records.length, totalParty, cashCount, cardCount, qrCount, receiptCount };
@@ -2454,8 +2453,8 @@
         return { dailySummaries, totalSummary: calcSummary(allRecords) };
       }, [periodFrom, periodTo, visitsByDate, getRecordsFromVisits]);
 
-      const getPaymentText = (p) => ({ cash:'現金', card:'カード', qr:'QR' }[p] || '-');
-      const getPaymentClass = (p) => ({ cash:'text-gray-600', card:'text-blue-600', qr:'text-purple-600' }[p] || 'text-gray-400');
+      const getPaymentText = (p) => ({ '現金':'現金', 'カード':'カード', 'QR':'QR', cash:'現金', card:'カード', qr:'QR' }[p] || p || '-');
+      const getPaymentClass = (p) => ({ '現金':'text-gray-600', 'カード':'text-blue-600', 'QR':'text-purple-600', cash:'text-gray-600', card:'text-blue-600', qr:'text-purple-600' }[p] || 'text-gray-400');
       const formatDateDisplay = (d) => `${d.getMonth()+1}月${d.getDate()}日（${daysOfWeek[d.getDay()]}）`;
 
       const toggleDetail = (idx) => {
@@ -3895,7 +3894,7 @@
         <div className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-800 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-8 shadow-2xl text-center max-w-sm w-full">
             <h1 className="text-3xl font-bold text-gray-800 mb-2">🍸 SHUFF</h1>
-            <p className="text-gray-500 mb-6">バー管理システム v6.2</p>
+            <p className="text-gray-500 mb-6">バー管理システム v7.2</p>
 
             <div className="bg-gray-100 rounded-2xl p-6 mb-4">
               <p className="text-sm text-gray-500">本日</p>
